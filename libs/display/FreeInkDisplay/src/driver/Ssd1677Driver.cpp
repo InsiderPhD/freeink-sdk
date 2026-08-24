@@ -437,10 +437,13 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
       if (mode == RefreshMode::Fast) mode = RefreshMode::Full;
       _needsInitialFull = false;
       mode = (_cfg.halfSeqOverride != 0) ? RefreshMode::Half : RefreshMode::Full;
-    } else if (!_isScreenOn && _cfg.fullSeqOverride == 0) {
+    } else if (!_isScreenOn && _cfg.fullSeqOverride == 0 && mode == RefreshMode::Fast) {
       // X4-class cold start: panel asleep -> a (warmed) HALF full-clear. Override
       // boards skip this — their fast sequence self-powers, so _isScreenOn is false
       // every page and forcing HALF would make every page a slow full-waveform flash.
+      // Only upgrade a differential FAST: an explicit HALF/FULL from the caller is
+      // already an absolute clean (a FULL is *stronger* — silent-reboot and sleep
+      // paints request it to kill ghosts) and must not be silently downgraded.
       mode = RefreshMode::Half;
     }
   }
