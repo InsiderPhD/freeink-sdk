@@ -289,9 +289,14 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   if (hookFired && _busyWaitEndHook != nullptr) _busyWaitEndHook();
   if (p == BusyPolarity::X3TwoPhase && !x3SawLow) return;
 
+#ifdef EPD_BUS_TRACE
   if (tag && Serial) {
     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
   }
+#else
+  (void)tag;
+  (void)start;
+#endif
 }
 
 void EpdBus::waitRefreshComplete(const char* tag) {
@@ -371,9 +376,14 @@ void EpdBus::waitRefreshComplete(const char* tag) {
   if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
 
   detachInterrupt(digitalPinToInterrupt(_pins.busy));
+#ifdef EPD_BUS_TRACE
   if (tag && Serial) {
     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
   }
+#else
+  (void)tag;
+  (void)start;
+#endif
 }
 
 void EpdBus::sendPlaneFlipped(uint8_t ramCmd, const uint8_t* plane, uint16_t height, uint16_t widthBytes) {
