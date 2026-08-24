@@ -277,6 +277,13 @@ class FreeInkDisplay {
   // Power management
   void deepSleep();
 
+  // Collapse the panel's analog rails (POF) between refreshes, retaining
+  // controller RAM. Recovers the panel from a PON-with-no-POF idle state
+  // (UC8179 display path with turnOffScreen=false); no-op on controllers whose
+  // driver doesn't override powerOffIdle. Safe to call any time from the task
+  // that owns rendering: drains a pending async refresh first.
+  void powerOffIdle();
+
   // Optional hooks fired around long BUSY waits (~0.3-2 s per refresh), so host
   // firmware can apply its own power policy (e.g. reduce the CPU clock) for the
   // wait window. Forwards to the bus, which owns every driver's busy-polling.

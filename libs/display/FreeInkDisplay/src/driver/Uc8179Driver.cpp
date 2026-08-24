@@ -386,6 +386,15 @@ void Uc8179Driver::requestResync(uint8_t settlePasses) {
 
 void Uc8179Driver::skipInitialResync() { _needFullClear = false; }
 
+void Uc8179Driver::powerOffIdle(EpdBus& bus) {
+  // POF only, never DSLP: controller RAM (OLD plane) must survive so the next
+  // partial refresh still diffs correctly after a bare PON.
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8179_idle_POF");
+  _isScreenOn = false;
+}
+
 void Uc8179Driver::deepSleep(EpdBus& bus) {
   _grayBaseValid = false;
   _absoluteGrayPlanes = false;
