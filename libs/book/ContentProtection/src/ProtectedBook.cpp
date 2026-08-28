@@ -1,5 +1,7 @@
 #include "ProtectedBook.h"
 
+#include "InflateAllocator.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +15,19 @@
 
 namespace freeink {
 namespace content {
+
+namespace {
+// Point a stream at the embedder's allocator, when one is installed. miniz then
+// takes its ~44KB inflate_state from there instead of the heap -- see
+// InflateAllocator.h for why that single allocation is the one that fails.
+void applyInflateAllocator(mz_stream* stream) {
+  const MzStreamAllocView view = currentInflateAllocator();
+  if (view.alloc == nullptr || view.release == nullptr) return;
+  stream->zalloc = reinterpret_cast<mz_alloc_func>(view.alloc);
+  stream->zfree = reinterpret_cast<mz_free_func>(view.release);
+  stream->opaque = view.opaque;
+}
+}  // namespace
 
 namespace {
 constexpr const char* kEncryptionXml = "META-INF/encryption.xml";
@@ -225,6 +240,14 @@ bool ProtectedBook::decryptEntryToSink(ByteSource& source, Crypto& crypto,
     return false;
   }
 
+  // NOTE: the plaintext is always inflated, regardless of entry->method. The zip
+  // method is NOT a reliable signal here -- because encrypted bytes do not
+  // compress, packagers routinely mark the entry stored while the plaintext
+  // underneath is deflated, recording the real method in encryption.xml's
+  // <compression Method="..."> element. Keying off entry->method therefore fed
+  // raw deflate bytes to the parser for such entries ("not well-formed" on
+  // cover.xhtml). Reading that element is the correct fix; until then, inflate
+  // unconditionally as before.
   constexpr size_t kCipherChunk = 2048;
   constexpr size_t kOutputChunk = 4096;
   auto* buffers = static_cast<uint8_t*>(malloc(kCipherChunk * 2 + kOutputChunk));
@@ -238,9 +261,10 @@ bool ProtectedBook::decryptEntryToSink(ByteSource& source, Crypto& crypto,
 
   mz_stream stream;
   memset(&stream, 0, sizeof(stream));
+  applyInflateAllocator(&stream);
   if (mz_inflateInit2(&stream, -15) != MZ_OK) {
     free(buffers);
-    lastError_ = "inflate setup failed";
+    lastError_ = "inflate setup failed (no contiguous block for the 32KB dictionary?)";
     return false;
   }
 
@@ -324,7 +348,13 @@ bool ProtectedBook::scanEncryptionXml(ByteSource& source, const ZipEntryInfo& en
     lastError_ = "entry offset unavailable";
     return false;
   }
-  if (entry.method != 0 && entry.method != 8) return false;
+  // Silent false here used to surface as the generic "failed to read
+  // encryption.xml", which says nothing about why. Name the method: anything
+  // other than stored/deflate means the container is not what this path assumes.
+  if (entry.method != 0 && entry.method != 8) {
+    lastError_ = "encryption.xml zip method " + std::to_string(entry.method) + " unsupported";
+    return false;
+  }
 
   constexpr size_t kChunk = 2048;
   auto* bufs = static_cast<uint8_t*>(malloc(kChunk * 2));  // freed below; kept raw for the single free
@@ -410,7 +440,11 @@ bool ProtectedBook::scanEncryptionXml(ByteSource& source, const ZipEntryInfo& en
   } else {
     mz_stream stream;
     memset(&stream, 0, sizeof(stream));
+    applyInflateAllocator(&stream);
     if (mz_inflateInit2(&stream, -15) != MZ_OK) {
+      // miniz allocates its inflate state here (~11KB), so this is an
+      // out-of-memory condition in all but pathological cases.
+      lastError_ = "inflate init failed for encryption.xml";
       free(bufs);
       return false;
     }
@@ -453,7 +487,14 @@ bool ProtectedBook::scanEncryptionXml(ByteSource& source, const ZipEntryInfo& en
   free(bufs);
 
   if (!ok || malformed) {
-    if (lastError_.empty()) lastError_ = "encryption manifest unreadable";
+    if (lastError_.empty()) {
+      // Carry the entry's shape: a zero compressedSize (a writer that defers to
+      // a data descriptor) and a short read look identical without it.
+      lastError_ = std::string(malformed ? "encryption manifest malformed" : "encryption manifest unreadable") +
+                   " (method " + std::to_string(entry.method) + ", csize " +
+                   std::to_string(entry.compressedSize) + ", usize " + std::to_string(entry.uncompressedSize) +
+                   ", tags " + std::to_string(encryptedUriHashes_.size()) + ")";
+    }
     return false;
   }
   std::sort(encryptedUriHashes_.begin(), encryptedUriHashes_.end());
@@ -511,6 +552,7 @@ bool ProtectedBook::inflateTo(const uint8_t* in, size_t inLen, uint8_t* out, siz
   stream.next_out = out;
   stream.avail_out = static_cast<unsigned int>(outLen);
 
+  applyInflateAllocator(&stream);
   if (mz_inflateInit2(&stream, -15) != MZ_OK) return false;
   // The whole input and output are in memory, so a single MZ_FINISH pass
   // suffices; anything but a clean end at exactly outLen is a corrupt entry.

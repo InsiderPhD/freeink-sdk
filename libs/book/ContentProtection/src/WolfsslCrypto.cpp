@@ -22,7 +22,9 @@
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
+#ifdef FREEINK_CONTENT_CLIENT_CRYPTO
 #include <wolfssl/wolfcrypt/pkcs12.h>
+#endif
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/sha.h>
 #include <wolfssl/wolfcrypt/sha256.h>
@@ -230,6 +232,19 @@ bool WolfsslCrypto::rsaPrivateSignRaw(const uint8_t* pkcs8Der, size_t pkcs8Len,
   return rsaPrivateRaw(pkcs8Der, pkcs8Len, padded, sizeof(padded), out, 128) == 128;
 }
 
+// --- client half (off-device credential setup) -------------------------------
+//
+// Account activation -- RSA keypair generation, RSAES-PKCS1-v1_5 encrypt to the
+// account certificate, and the PKCS#12 signing bundle -- runs in the user's
+// browser over WebCrypto, not here. CrossPoint therefore builds without
+// WOLFSSL_KEY_GEN and WC_RC2, which these functions need, so they compile to
+// refusals: nothing on the device calls them, and a build that starts to must
+// define FREEINK_CONTENT_CLIENT_CRYPTO (and re-add those two wolfSSL flags)
+// rather than get a silent false.
+//
+// The bodies are kept rather than deleted so the two builds stay one source.
+#ifdef FREEINK_CONTENT_CLIENT_CRYPTO
+
 bool WolfsslCrypto::rsaGenerate(RsaKeyPairDer* out) {
   lastError.clear();
   if (!rngOk_) {
@@ -372,6 +387,10 @@ bool WolfsslCrypto::rsaPublicEncrypt(const uint8_t* certDer, size_t certLen, con
   return ok;
 }
 
+#endif  // FREEINK_CONTENT_CLIENT_CRYPTO
+
+// --- read path ---------------------------------------------------------------
+
 bool WolfsslCrypto::aes128CbcDecrypt(const uint8_t key[16], const uint8_t iv[16], const uint8_t* in,
                                      size_t len, uint8_t* out) {
   if (len % 16 != 0) return false;
@@ -379,6 +398,8 @@ bool WolfsslCrypto::aes128CbcDecrypt(const uint8_t key[16], const uint8_t iv[16]
   if (wc_AesSetKey(&aes, key, 16, iv, AES_DECRYPTION) != 0) return false;
   return wc_AesCbcDecrypt(&aes, out, in, static_cast<word32>(len)) == 0;
 }
+
+#ifdef FREEINK_CONTENT_CLIENT_CRYPTO
 
 bool WolfsslCrypto::aes128CbcEncrypt(const uint8_t key[16], const uint8_t iv[16], const uint8_t* in,
                                      size_t len, uint8_t* out) {
@@ -413,26 +434,85 @@ bool WolfsslCrypto::pkcs12Extract(const uint8_t* p12, size_t len, const std::str
   byte* key = nullptr;
   byte* cert = nullptr;
   word32 keyLen = 0, certLen = 0;
-  const int rc = wc_PKCS12_parse(bundle, password.c_str(), &key, &keyLen, &cert, &certLen, nullptr);
+  // Ask for the leftover certificates too. wc_PKCS12_parse only fills `cert`
+  // with a bag whose public key it could match to the private key
+  // (freeDecCertList -> ParseCertRelative + wc_CheckPrivateKeyCert); everything
+  // it could not match goes to this list, and passing NULL here freed it. A
+  // trimmed build that fails a real-world cert parse — the same hazard
+  // rsaPublicEncrypt already carries a fallback for — therefore returned
+  // rc=0 with a key and no cert, and the bundle looked broken when it wasn't.
+  WC_DerCertList* caList = nullptr;
+  const int rc = wc_PKCS12_parse(bundle, password.c_str(), &key, &keyLen, &cert, &certLen, &caList);
   wc_PKCS12_free(bundle);
-  // A bundle missing either bag can parse "successfully" with one output null;
-  // free whatever was returned before bailing.
-  if (rc < 0 || !key || !cert) {
+
+  // Adopt the matched cert when there is one, else the first bag that came back
+  // unmatched. Copy rather than take ownership: wc_FreeCertList frees every
+  // node's buffer, so the list has to outlive nothing.
+  std::vector<uint8_t> certOut;
+  bool usedFallback = false;
+  size_t caCount = 0;
+  if (cert && certLen > 0) {
+    certOut.assign(cert, cert + certLen);
+  } else {
+    for (WC_DerCertList* node = caList; node != nullptr; node = node->next) {
+      caCount++;
+      if (certOut.empty() && node->buffer && node->bufferSz > 0) {
+        certOut.assign(node->buffer, node->buffer + node->bufferSz);
+        usedFallback = true;
+      }
+    }
+  }
+  if (caList) wc_FreeCertList(caList, NULL);
+
+  if (rc < 0 || !key || certOut.empty()) {
     // rc<0 with a valid bundle usually means the passphrase is wrong.
     lastError = "wc_PKCS12_parse rc=" + std::to_string(rc) + " keyLen=" + std::to_string(keyLen) +
-                " certLen=" + std::to_string(certLen) + " pwLen=" + std::to_string(password.size());
+                " certLen=" + std::to_string(certLen) + " caCerts=" + std::to_string(caCount) +
+                " pwLen=" + std::to_string(password.size());
     if (key) XFREE(key, NULL, DYNAMIC_TYPE_PUBLIC_KEY);
     if (cert) XFREE(cert, NULL, DYNAMIC_TYPE_PKCS);
     return false;
   }
+  if (usedFallback) {
+    // Not an error, but worth seeing in a log: the pairing was assumed, not
+    // proven, so a bundle carrying a chain could in principle hand back the
+    // wrong certificate.
+    lastError = "note: cert unmatched by wolfSSL, used first of " + std::to_string(caCount);
+  }
 
   // The parsed private key is traditional (PKCS#1) — wrap as PKCS#8.
   const bool ok = wrapPkcs8(key, keyLen, keyPkcs8);
-  if (ok) certDer->assign(cert, cert + certLen);
+  if (ok) *certDer = std::move(certOut);
   XFREE(key, NULL, DYNAMIC_TYPE_PUBLIC_KEY);
-  XFREE(cert, NULL, DYNAMIC_TYPE_PKCS);
+  if (cert) XFREE(cert, NULL, DYNAMIC_TYPE_PKCS);
   return ok;
 }
+
+#else  // !FREEINK_CONTENT_CLIENT_CRYPTO
+
+// Refusals for the read-only build. lastError is set so a caller that reaches
+// one gets a diagnosable message instead of a bare false.
+bool WolfsslCrypto::rsaGenerate(RsaKeyPairDer*) {
+  lastError = "client crypto not built (activation runs in the browser)";
+  return false;
+}
+bool WolfsslCrypto::rsaPublicEncrypt(const uint8_t*, size_t, const uint8_t*, size_t, uint8_t*, size_t,
+                                     size_t*) {
+  lastError = "client crypto not built (activation runs in the browser)";
+  return false;
+}
+bool WolfsslCrypto::aes128CbcEncrypt(const uint8_t[16], const uint8_t[16], const uint8_t*, size_t,
+                                     uint8_t*) {
+  lastError = "client crypto not built (activation runs in the browser)";
+  return false;
+}
+bool WolfsslCrypto::pkcs12Extract(const uint8_t*, size_t, const std::string&, std::vector<uint8_t>*,
+                                  std::vector<uint8_t>*) {
+  lastError = "client crypto not built (activation runs in the browser)";
+  return false;
+}
+
+#endif  // FREEINK_CONTENT_CLIENT_CRYPTO
 
 }  // namespace content
 }  // namespace freeink
