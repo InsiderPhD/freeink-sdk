@@ -343,15 +343,8 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     // not, so 0xCC is correct in both states. The production driver marks power OFF
     // after this pass; mirror that so the next refresh re-enables the rails.
     displayMode = 0xCC;
-    // Only mark the screen off when the activation actually powered it down. A
-    // custom-LUT/AA pass with turnOff==false leaves the rails ON (0xCC keeps
-    // CLOCK/ANALOG enabled); flipping the flag false here desyncs it from the
-    // real rail state and lets deepSleep() skip the booster-off sequence,
-    // leaving the charge-pump biased while PR #3215 holds the master rail up.
-    if (turnOff) {
-      displayMode |= 0x03;
-      _isScreenOn = false;
-    }
+    if (turnOff) displayMode |= 0x03;
+    _isScreenOn = false;
   } else {  // Fast
     displayMode |= 0x1C;
   }
@@ -380,11 +373,13 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
 static constexpr unsigned long POWER_DOWN_WAIT_MS = 1500;
 
 void Ssd1677Driver::powerOffController(EpdBus& bus) {
-  // Always park: re-issuing the border/analog-off sequence on an already-off
-  // panel is harmless, and this guarantees the booster is off before DSLP even
-  // if _isScreenOn drifted out of sync (see the AA-pass desync above). Upstream
-  // returns early on !_isScreenOn instead; keep parking, but see the bounded
-  // wait below for why bus.waitBusy() cannot be used to close the sequence.
+  // Nothing to park when the rails are already down, and this is the guard that
+  // matters: refresh() now clears _isScreenOn on every 0xCC activation, so the
+  // flag is trustworthy again and the already-off case costs no bus traffic at
+  // all. The bounded wait below stays as a second line of defence -- if the flag
+  // ever desyncs true-while-off again, that caps the damage at POWER_DOWN_WAIT_MS
+  // instead of EpdBus's 30 s ceiling.
+  if (!_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
   bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
@@ -395,10 +390,11 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   delay(200);
   // Bounded, not bus.waitBusy(): that call's only ceiling is EpdBus.cpp's 30 s
   // bail-out, and this is a ~200 ms operation. A panel whose rail is already
-  // collapsed leaves BUSY reading HIGH forever, so the unbounded wait spent the
-  // full 30 s here on every sleep -- 30 s during which the sleep image is on the
-  // glass, the loop task is still inside enterDeepSleep() and the device answers
-  // no buttons, which reads to a user as "it will not turn on".
+  // collapsed leaves BUSY reading HIGH forever. Measured on an X4 before the
+  // guard above was restored: 30 s here on every sleep, spent after the sleep
+  // image was already on the glass with the loop task still inside
+  // enterDeepSleep() and polling no input -- which reads to a user as a device
+  // that ignores the power button and will not turn on.
   const unsigned long powerDownStart = millis();
   while (bus.isBusy() && millis() - powerDownStart < POWER_DOWN_WAIT_MS) delay(5);
   _isScreenOn = false;
