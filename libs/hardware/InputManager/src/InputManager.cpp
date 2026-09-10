@@ -675,7 +675,13 @@ unsigned long InputManager::lastTouchHeldMs() const {
 
 bool InputManager::wasTouchActivity() const {
 #if FREEINK_CAP_TOUCH
-  return touchPressedEvent || touchReleasedEvent;
+  // The home key is part of the touch panel, but a bar contact never becomes a
+  // screen contact (both the GT911 and GSLX680 paths route it to the home-key
+  // events and clear touchPressed), so it has to be reported here explicitly.
+  // Without it a session driven only by the home pad -- a reader with a
+  // configured home-key action -- resets no idle timer and sleeps under the
+  // user's finger.
+  return touchPressedEvent || touchReleasedEvent || touchHomeKeyEvent || touchHomeKeyTapEvent || touchHomeKeyLongEvent;
 #else
   return false;
 #endif
