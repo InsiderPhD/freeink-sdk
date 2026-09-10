@@ -375,12 +375,16 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
   _isScreenOn = true;
 }
 
+// Ceiling for the analog/clock power-down BUSY wait. The sequence above is a
+// ~200 ms operation; anything past this means BUSY is stuck rather than working.
+static constexpr unsigned long POWER_DOWN_WAIT_MS = 1500;
+
 void Ssd1677Driver::powerOffController(EpdBus& bus) {
   // Always park: re-issuing the border/analog-off sequence on an already-off
   // panel is harmless, and this guarantees the booster is off before DSLP even
-  // if _isScreenOn drifted out of sync (see the AA-pass desync above). This
-  // driver is ActiveHigh (Ssd1677Driver.h), whose waitBusy() has a 30 s ceiling
-  // (EpdBus.cpp:225), so an off panel cannot hang here.
+  // if _isScreenOn drifted out of sync (see the AA-pass desync above). Upstream
+  // returns early on !_isScreenOn instead; keep parking, but see the bounded
+  // wait below for why bus.waitBusy() cannot be used to close the sequence.
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
   bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
@@ -389,7 +393,14 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   // Production X4 Pro power-off time. If BUSY remains asserted after the fixed
   // interval, wait out the remainder before changing the state flag.
   delay(200);
-  bus.waitBusy(" display power-down");
+  // Bounded, not bus.waitBusy(): that call's only ceiling is EpdBus.cpp's 30 s
+  // bail-out, and this is a ~200 ms operation. A panel whose rail is already
+  // collapsed leaves BUSY reading HIGH forever, so the unbounded wait spent the
+  // full 30 s here on every sleep -- 30 s during which the sleep image is on the
+  // glass, the loop task is still inside enterDeepSleep() and the device answers
+  // no buttons, which reads to a user as "it will not turn on".
+  const unsigned long powerDownStart = millis();
+  while (bus.isBusy() && millis() - powerDownStart < POWER_DOWN_WAIT_MS) delay(5);
   _isScreenOn = false;
 }
 
