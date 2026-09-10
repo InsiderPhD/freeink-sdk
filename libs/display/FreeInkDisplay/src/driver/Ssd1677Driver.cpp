@@ -342,9 +342,24 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     // (the usual X4 case, where stage 1 left them on), and required when they are
     // not, so 0xCC is correct in both states. The production driver marks power OFF
     // after this pass; mirror that so the next refresh re-enables the rails.
+    //
+    // Only mark the screen off when the activation actually powered it down. A
+    // custom-LUT/AA pass with turnOff == false leaves the rails ON (0xCC keeps
+    // CLOCK/ANALOG enabled), so clearing the flag unconditionally desyncs it
+    // from the real rail state -- and powerOffController()'s !_isScreenOn early
+    // return then skips the booster park before DSLP, leaving the charge pump
+    // biased while the X4 Pro holds its master rail (GPIO1) up through deep
+    // sleep. Measured: 3% battery in one hour asleep.
+    //
+    // Upstream c7986a1 clears it unconditionally, on the basis that the PR #3215
+    // rail workarounds were no longer needed. That does not hold for this fork's
+    // X4 Pro sleep path, so the conditional form is kept deliberately -- do not
+    // "resync with upstream" here without re-running the drain test.
     displayMode = 0xCC;
-    if (turnOff) displayMode |= 0x03;
-    _isScreenOn = false;
+    if (turnOff) {
+      displayMode |= 0x03;
+      _isScreenOn = false;
+    }
   } else {  // Fast
     displayMode |= 0x1C;
   }
@@ -373,12 +388,17 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
 static constexpr unsigned long POWER_DOWN_WAIT_MS = 1500;
 
 void Ssd1677Driver::powerOffController(EpdBus& bus) {
-  // Nothing to park when the rails are already down, and this is the guard that
-  // matters: refresh() now clears _isScreenOn on every 0xCC activation, so the
-  // flag is trustworthy again and the already-off case costs no bus traffic at
-  // all. The bounded wait below stays as a second line of defence -- if the flag
-  // ever desyncs true-while-off again, that caps the damage at POWER_DOWN_WAIT_MS
-  // instead of EpdBus's 30 s ceiling.
+  // Nothing to park when the rails are already down: skip the sequence and the
+  // BUSY wait entirely, which is what keeps deep-sleep entry fast.
+  //
+  // This guard and the bounded wait below are a pair, and both are load-bearing.
+  // refresh() clears _isScreenOn only when it actually powered the panel down
+  // (turnOff), because clearing it unconditionally skips the booster park and
+  // costs real battery in sleep -- see the note there. That deliberate
+  // conditional means the flag can still lag the hardware in the other
+  // direction, true-while-off, and this driver is BusyPolarity::ActiveHigh, so
+  // an off panel reads BUSY HIGH forever. The bound is what stops that becoming
+  // EpdBus's 30 s ceiling.
   if (!_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
