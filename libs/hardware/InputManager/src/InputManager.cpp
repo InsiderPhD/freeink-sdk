@@ -1218,6 +1218,8 @@ bool InputManager::wasHomeKeyTapped() const { return touchHomeKeyTapEvent; }
 
 bool InputManager::wasHomeKeyLongPressed() const { return touchHomeKeyLongEvent; }
 
+bool InputManager::isHomeKeyDown() const { return touchHomeKeyDown; }
+
 void InputManager::beginTouch() {
 #if FREEINK_CAP_TOUCH
   const auto& t = BoardConfig::ACTIVE.touch;

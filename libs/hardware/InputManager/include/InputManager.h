@@ -194,6 +194,14 @@ class InputManager {
   // Cleared each #update().
   bool wasHomeKeyLongPressed() const;
 
+  // True for as long as the home key is held. The level behind the three edge
+  // events above, for consumers that need to ask "is it down right now" rather
+  // than "did something happen this frame" — a chord of the home key and
+  // another input cannot be built from edges. On the GT911 the key is its own
+  // status bit, independent of screen contacts, so this stays true while a
+  // finger is also on the glass.
+  bool isHomeKeyDown() const;
+
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
   // returns a (1<<BTN_*) bitmask that is OR'd into every update(); the board
