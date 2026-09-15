@@ -835,15 +835,25 @@ constexpr SdmmcPins NO_SDMMC = {
 constexpr BatteryGaugeConfig NO_GAUGE = {PIN_UNASSIGNED, PIN_UNASSIGNED, 0, 0, 0};  // ADC battery
 
 // Shared display SPI default for every Xteink board and controller variant.
+// Consumers that have validated a faster clock on their hardware can raise it
+// with -DFREEINK_XTEINK_DISPLAY_SPI_HZ=<hz>. Every controller on these boards
+// (SSD1677, UC8253, UC8179, UC8279) is rated to 20 MHz for serial writes, and
+// plane uploads scale inversely with the clock, so 10 MHz roughly doubles the
+// SPI share of each refresh.
+#ifdef FREEINK_XTEINK_DISPLAY_SPI_HZ
+constexpr uint32_t XTEINK_DISPLAY_SPI_HZ = FREEINK_XTEINK_DISPLAY_SPI_HZ;
+#else
 constexpr uint32_t XTEINK_DISPLAY_SPI_HZ = 10000000u;
+#endif
 
 // --- Xteink X4 — ESP32-C3, SSD1677 (800x480) ---------------------------------
-// Default 10 MHz, like the other Xteink profiles. Preserve the explicit legacy
-// 40 MHz opt-in for consumers that have validated it on their hardware.
+// Follows the shared Xteink default above (including its override). Preserve
+// the explicit legacy 40 MHz opt-in for consumers that have validated it on
+// their hardware.
 #ifdef FREEINK_X4_OVERCLOCK_SPI
 #define FREEINK_X4_DISPLAY_SPI_HZ 40000000u
 #else
-#define FREEINK_X4_DISPLAY_SPI_HZ 10000000u
+#define FREEINK_X4_DISPLAY_SPI_HZ XTEINK_DISPLAY_SPI_HZ
 #endif
 constexpr BoardProfile XTEINK_X4 = {Board::XteinkX4,
                                     "xteink_x4",
