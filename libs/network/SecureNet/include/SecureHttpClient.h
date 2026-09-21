@@ -214,14 +214,22 @@ class SecureHttpClient {
       if (!ensureConnected()) return -1;
 
       if (!writeRequest(method, payload, payloadLen)) {
+        recordFailure("write", 0, std::string(), reusing);
         closeConnection();
         if (reusing && attempt == 0) continue;
         return -1;
       }
 
       const unsigned long headerDeadline = millis() + _timeoutMs;
+      const unsigned long requestSentMs = millis();
       std::string line;
       if (!readLine(*_conn, line, headerDeadline, shouldAbort)) {
+        // The single most useful fact when a request dies here is whether ANY
+        // bytes came back. readLine accumulates into `line` as it goes, so a
+        // non-empty line on timeout means the peer answered and we failed to
+        // frame it; an empty line with available()==0 on a still-connected
+        // socket means the peer sent nothing at all, and the fault is upstream.
+        recordFailure("status", millis() - requestSentMs, line, reusing);
         closeConnection();
         if (reusing && attempt == 0 && !_aborted) continue;
         return -1;
@@ -295,6 +303,31 @@ class SecureHttpClient {
     }
     return -1;
   }
+
+  // Why the last sendRequest() returned -1. The SDK deliberately does not log
+  // this itself: the host project replaces Serial with its own Print subclass
+  // that is not linked into every library including this header, so printing
+  // from here fails at link time in some translation units. Callers log it
+  // through their own logger instead.
+  //
+  // `stage` is the point it gave up:
+  //   "connect" - never got a TLS session
+  //   "write"   - could not put the request on the wire
+  //   "status"  - request went out, no HTTP status line came back
+  //   "abort"   - the caller's abort callback fired
+  // For "status", `partial` holds whatever bytes DID arrive before the
+  // deadline, which is the single fact that separates a silent server (empty,
+  // available 0, still connected) from a framing bug on our side (non-empty).
+  struct Diagnostics {
+    const char* stage = "";
+    unsigned long elapsedMs = 0;
+    size_t partialBytes = 0;
+    int available = 0;
+    bool connected = false;
+    bool reusedConnection = false;
+    char partial[40] = {};
+  };
+  const Diagnostics& lastFailure() const { return _lastFailure; }
 
   const std::string& getString() const { return _body; }
   int getStatus() const { return _status; }
@@ -477,6 +510,19 @@ class SecureHttpClient {
     }
     return true;
   }
+
+  void recordFailure(const char* stage, unsigned long elapsedMs, const std::string& partial, bool reused) {
+    _lastFailure.stage = stage;
+    _lastFailure.elapsedMs = elapsedMs;
+    _lastFailure.partialBytes = partial.size();
+    _lastFailure.available = _conn ? _conn->available() : -1;
+    _lastFailure.connected = _conn && _conn->connected();
+    _lastFailure.reusedConnection = reused;
+    snprintf(_lastFailure.partial, sizeof(_lastFailure.partial), "%.*s",
+             static_cast<int>(sizeof(_lastFailure.partial) - 1), partial.c_str());
+  }
+
+  Diagnostics _lastFailure;
 
   // Reads one CRLF-terminated line (CR stripped). Returns false on timeout, a
   // closed connection with no pending data, or an over-long line.
