@@ -40,6 +40,7 @@
 #include <iterator>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <utility>
@@ -282,7 +283,12 @@ class SecureHttpClient {
       _reportProgress = !discardBody && static_cast<bool>(_progress);
 
       bool reusableFraming = true;
-      if (transferEncoding.find("chunked") != std::string::npos) {
+      if (strcmp(method, "HEAD") == 0 || _status == 204 || _status == 304 || (_status >= 100 && _status < 200)) {
+        // RFC 9112 6.3: these never carry a body, whatever the headers say. A
+        // 204 usually has no Content-Length, which below would mean "read until
+        // close" -- on a keep-alive socket that waits out the whole timeout.
+        _bodyComplete = true;
+      } else if (transferEncoding.find("chunked") != std::string::npos) {
         _bodyComplete = readChunked(*_conn, bodySink, shouldAbort);
       } else if (transferEncoding.empty() || transferEncoding == "identity") {
         if (_haveContentLength) {
