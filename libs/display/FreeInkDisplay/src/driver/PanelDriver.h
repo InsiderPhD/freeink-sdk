@@ -52,6 +52,12 @@ class PanelDriver {
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;
   virtual void deepSleep(EpdBus& bus) = 0;
+
+  // Drop the panel's analog rails (POF) while keeping the controller powered so
+  // its image RAM survives — the next paint pays only a PON and still diffs
+  // against the retained OLD plane. Default no-op: only controllers whose
+  // display path can leave the rails up between refreshes (UC8179) need it.
+  virtual void powerOffIdle(EpdBus& bus) { (void)bus; }
   // Called only after the host's complete frame (including grayscale) finishes.
   // Retain controller RAM and the partial-refresh baseline; never reset/sleep.
   virtual void powerOffBetweenFrames(EpdBus& bus) { (void)bus; }

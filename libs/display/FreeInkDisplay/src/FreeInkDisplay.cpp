@@ -1203,6 +1203,15 @@ void FreeInkDisplay::deepSleep() {
   if (_driver) _driver->deepSleep(_bus);
 }
 
+void FreeInkDisplay::powerOffIdle() {
+  DisplayPmLock pmLock;
+  // Drain any in-flight async refresh first — its displayFinish() may already
+  // POF (turnOffScreen paths), which composes fine with the driver's
+  // _isScreenOn guard.
+  syncPendingAsync();
+  if (_driver) _driver->powerOffIdle(_bus);
+}
+
 // ============================================================================
 // Desktop/test helper
 // ============================================================================
