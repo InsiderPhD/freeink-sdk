@@ -113,6 +113,8 @@ class FreeInkDisplay {
   void setInverted(bool inverted);
   bool toggleInverted();
   bool isInverted() const { return _inverted; }
+  // Dark border ring for firmware-side dark mode (see PanelDriver::setDarkBorder).
+  void setDarkBorder(bool dark);
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif
@@ -493,6 +495,7 @@ class FreeInkDisplay {
   bool _singleBufferFastDiff = false;
   bool _fastGrayscaleLut = false;
   bool _inverted = false;
+  bool _darkBorder = false;
   bool _inversionDirty = false;
 
   // Runtime display geometry (seeded from the driver at begin()).

@@ -54,6 +54,7 @@ class Ssd2677Driver : public PanelDriver {
     return {};
   }
   void requestResync(uint8_t) override { _absoluteGray = false; }
+  void setDarkBorder(bool dark) override { _darkBorder = dark; }
   void beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback, bool turnOff) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
@@ -67,11 +68,14 @@ class Ssd2677Driver : public PanelDriver {
   void powerOn(EpdBus& bus);
   void powerAndRefresh(EpdBus& bus, bool turnOff);
   void refreshWith(EpdBus& bus, const unsigned char* lut, bool turnOff);
+  void applyBorder(EpdBus& bus);
 
   bool _needsPowerOn = true;
   bool _needsInitialFull = true;
   uint8_t _latchedWaveform = 0;  // Sticky: OTP waveform code currently latched (0 = none)
   bool _absoluteGray = false;  // the current gray pass began as a complete image
+  bool _darkBorder = false;
+  uint8_t _cdi = 0;  // CMD 0x50 value on the controller now; 0 = unknown (re-send)
   uint8_t* _lsb = nullptr;  // retained LSB mask: the renderer reuses its buffer for the MSB pass
   uint8_t* _old = nullptr;  // retained old plane (last displayed frame); host is single-buffer
                             // so `prev` is always null — mirror stock's obj+0x1020, seeded white

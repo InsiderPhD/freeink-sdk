@@ -405,7 +405,7 @@ void Ssd1677Driver::initController(EpdBus& bus) {
   bus.data(_mirrorY ? (_cfg.driverOutputScan | SCAN_TB_FLIP) : _cfg.driverOutputScan);
 
   bus.cmd(CMD_BORDER_WAVEFORM);
-  bus.data(_cfg.borderWaveformInit);
+  bus.data(borderValue(_cfg.borderWaveformInit));
 
   setRamArea(bus, 0, 0, _w, _h);
 
@@ -514,7 +514,7 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
                                : _cfg.borderWaveformFull;
     if (border != 0) {
       bus.cmd(CMD_BORDER_WAVEFORM);
-      bus.data(border);
+      bus.data(borderValue(border));
     }
     if (mode == RefreshMode::Half) {
       bus.cmd(CMD_WRITE_TEMP);
@@ -545,6 +545,14 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
   if (boardLut && mode != RefreshMode::Fast) {
     // Board FULL/HALF LUT: clock/analog on + display mode 1 without the OTP LUT
     // load (0x10 clear); FULL loads the temperature (0xE4), HALF writes it (0xC4).
+    // The board's fast LUT parks the border at its fast value (VCOM on the
+    // Picco), so put the full-refresh border back or it is never driven.
+    const uint8_t border = (mode == RefreshMode::Half && _cfg.borderWaveformHalf != 0) ? _cfg.borderWaveformHalf
+                                                                                      : _cfg.borderWaveformFull;
+    if (border != 0) {
+      bus.cmd(CMD_BORDER_WAVEFORM);
+      bus.data(borderValue(border));
+    }
     uint8_t ctrl2 = 0xE4;
     if (mode == RefreshMode::Half) {
       bus.cmd(CMD_WRITE_TEMP);
@@ -611,6 +619,18 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
   _isScreenOn = true;
 }
 
+// CMD 0x3C: bits 7:6 pick the border source (00 = GS transition, i.e. follow a
+// LUT row; 01 fixed level; 10 VCOM; 11 HiZ) and, for 00, bits 1:0 pick the row:
+// LUT0 black->black, LUT1 black->white, LUT2 white->black, LUT3 white->white
+// (RAM bit 1 = white). The light rows (LUT1, LUT3) end white, so under a dark
+// page the border is a white frame; flipping the row bits picks the matching
+// row that ends black (LUT1 -> LUT2, LUT3 -> LUT0). VCOM/HiZ/fixed values don't
+// follow the page and are left alone (X4: 0xC0).
+uint8_t Ssd1677Driver::borderValue(const uint8_t configured) const {
+  if (!_darkBorder || (configured & 0xC0) != 0) return configured;
+  return configured ^ 0x03;
+}
+
 void Ssd1677Driver::powerOffBetweenFrames(EpdBus& bus) {
   // Picco idle shutdown uses BUSY, with one tick for command propagation.
   // Other callers keep their existing production shutdown timing.
@@ -624,7 +644,7 @@ static constexpr unsigned long POWER_DOWN_WAIT_MS = 1500;
 void Ssd1677Driver::powerOffController(EpdBus& bus, uint16_t settleMs) {
   if (!_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
-  bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
+  bus.data(borderValue(_cfg.borderWaveformInit));  // X4 Pro: 0x80
   bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
   bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
   bus.cmd(CMD_MASTER_ACTIVATION);

@@ -79,6 +79,12 @@ constexpr uint8_t CMD_POWER_ON = 0x04;
 constexpr uint8_t CMD_POWER_OFF = 0x02;
 constexpr uint8_t CMD_REFRESH = 0x12;
 constexpr uint8_t CMD_DEEP_SLEEP = 0x07;
+// VCOM/data interval (CDI). Bits 7:6 select the border output: the Picco init
+// table's 0x77 drives it white, 0x37 black (UC81xx-family encoding, same bits
+// 5:0). White frames a dark-mode page in a bright ring at the bezel.
+constexpr uint8_t CMD_CDI = 0x50;
+constexpr uint8_t CDI_PICCO_WHITE_BORDER = 0x77;
+constexpr uint8_t CDI_PICCO_BLACK_BORDER = 0x37;
 constexpr uint16_t LUT_LEN = 535;
 
 // 8 pixels of old + new -> two bytes of 2-bit pixels, old in the high bit,
@@ -128,6 +134,7 @@ void Ssd2677Driver::initPanel(EpdBus& bus) {
   if (!list[count - 1].waitBusy) bus.waitBusy(" SSD2677 init");
   _needsPowerOn = true;
   _latchedWaveform = 0;
+  _cdi = 0;  // the init table just rewrote it
 }
 
 // Sticky: select the OTP waveform for the next frame (stock
@@ -240,7 +247,18 @@ void Ssd2677Driver::powerAndRefresh(EpdBus& bus, bool turnOff) {
   if (turnOff) powerOffBetweenFrames(bus);
 }
 
+// Picco only: the Sticky's border is untested, so it keeps its init value.
+void Ssd2677Driver::applyBorder(EpdBus& bus) {
+  if (isSticky()) return;
+  const uint8_t want = _darkBorder ? CDI_PICCO_BLACK_BORDER : CDI_PICCO_WHITE_BORDER;
+  if (_cdi == want) return;
+  bus.cmd(CMD_CDI);
+  bus.data(want);
+  _cdi = want;
+}
+
 void Ssd2677Driver::refreshWith(EpdBus& bus, const unsigned char* lut, bool turnOff) {
+  applyBorder(bus);
   bus.cmd(CMD_LUT);
   bus.data(lut, LUT_LEN);
   powerAndRefresh(bus, turnOff);

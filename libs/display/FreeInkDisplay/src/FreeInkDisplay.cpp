@@ -249,7 +249,10 @@ void FreeInkDisplay::selectDriver() {
   }
   // A driver chosen after setInverted() (begin(), setDisplayX3()) must still
   // learn the standing content polarity.
-  if (_driver) _driver->setBackgroundHint(_inverted);
+  if (_driver) {
+    _driver->setBackgroundHint(_inverted);
+    _driver->setDarkBorder(_darkBorder);
+  }
 }
 
 const char* FreeInkDisplay::getControllerName() const { return _driver ? _driver->controllerName() : nullptr; }
@@ -396,6 +399,12 @@ void FreeInkDisplay::setInverted(const bool inverted) {
   _shadowValid = false;
   _redRamSynced = false;
   if (_driver) _driver->setBackgroundHint(inverted);
+}
+
+void FreeInkDisplay::setDarkBorder(const bool dark) {
+  if (_darkBorder == dark) return;
+  _darkBorder = dark;
+  if (_driver) _driver->setDarkBorder(dark);
 }
 
 bool FreeInkDisplay::toggleInverted() {

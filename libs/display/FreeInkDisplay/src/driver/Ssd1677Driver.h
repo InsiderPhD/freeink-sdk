@@ -103,6 +103,7 @@ class Ssd1677Driver : public PanelDriver {
                      uint16_t h, bool turnOff) override;
 
   void requestResync(uint8_t) override { _needsGrayClear = true; _absoluteInput = false; }
+  void setDarkBorder(bool dark) override { _darkBorder = dark; }
   void beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback, bool turnOff) override;
 
   void seedPreviousFrame(EpdBus& bus, const uint8_t* buf) override;
@@ -157,6 +158,9 @@ class Ssd1677Driver : public PanelDriver {
   bool _isScreenOn = false;
   bool _inGrayscaleMode = false;
   bool _customLutActive = false;
+  bool _darkBorder = false;
+  // A config border value adjusted for setDarkBorder(); see the .cpp.
+  uint8_t borderValue(uint8_t configured) const;
   // Async 0xFC updates cannot issue the separate power-off activation until the
   // display waveform completes; displayFinish() consumes this flag.
   bool _pendingPowerOff = false;

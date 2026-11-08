@@ -221,6 +221,12 @@ class PanelDriver {
   // non-flashing. Drivers may use this to widen their drive set (re-blacken
   // the unchanged background each update) or bias their deghost direction.
   virtual void setBackgroundHint(bool darkBackground) { (void)darkBackground; }
+  // Border colour for firmware that inverts its own framebuffer for dark mode
+  // (so setInverted()/setBackgroundHint() never see it). The border ring outside
+  // the RAM area is driven by its own register, not by pixels; drivers whose
+  // border follows a waveform may drive it black while this is set so the page
+  // is not framed in white. Takes effect on the next refresh that drives it.
+  virtual void setDarkBorder(bool dark) { (void)dark; }
   // Capture the cancellation generation at the start of a logical UI render.
   // This must happen before CPU-side composition: input arriving while an old
   // frame is being composed must still cancel its optional post-refresh work.
