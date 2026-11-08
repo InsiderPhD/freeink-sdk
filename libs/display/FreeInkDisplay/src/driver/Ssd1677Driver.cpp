@@ -617,6 +617,10 @@ void Ssd1677Driver::powerOffBetweenFrames(EpdBus& bus) {
   powerOffController(bus, 1);
 }
 
+// Ceiling for the analog/clock power-down BUSY wait. The sequence is a ~200 ms
+// operation; anything past this means BUSY is stuck rather than working.
+static constexpr unsigned long POWER_DOWN_WAIT_MS = 1500;
+
 void Ssd1677Driver::powerOffController(EpdBus& bus, uint16_t settleMs) {
   if (!_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
@@ -627,7 +631,13 @@ void Ssd1677Driver::powerOffController(EpdBus& bus, uint16_t settleMs) {
   // Production X4 Pro power-off time. If BUSY remains asserted after the fixed
   // interval, wait out the remainder before changing the state flag.
   delay(settleMs);
-  bus.waitBusy(" display power-down");
+  // Bounded, not bus.waitBusy(): that call's only ceiling is EpdBus.cpp's 30 s
+  // bail-out, and this is a ~200 ms operation. A panel whose rail is already
+  // collapsed (_isScreenOn desynced true-while-off) leaves BUSY reading HIGH
+  // forever; measured on an X4, that spent the full 30 s here on every sleep with
+  // the sleep image already on the glass and the device answering no buttons.
+  const unsigned long powerDownStart = millis();
+  while (bus.isBusy() && millis() - powerDownStart < POWER_DOWN_WAIT_MS) delay(5);
   _isScreenOn = false;
 }
 
@@ -693,12 +703,15 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
       mode = (_cfg.halfSeqOverride != 0) ? RefreshMode::Half : RefreshMode::Full;
     }
     _needsInitialFull = false;
-  } else if (!turnOff && !_isScreenOn && _cfg.fullSeqOverride == 0) {
+  } else if (!turnOff && !_isScreenOn && _cfg.fullSeqOverride == 0 && mode == RefreshMode::Fast) {
     // X4-class cold start: panel asleep -> a (warmed) HALF full-clear. Override
     // boards skip this — their fast sequence self-powers, so _isScreenOn is false
     // every page and forcing HALF would make every page a slow full-waveform flash.
     // A turnOff caller powers the panel down itself after every refresh, so
     // !_isScreenOn carries no cold-start signal there either; leave it gated.
+    // Only upgrade a differential FAST: an explicit HALF/FULL from the caller is
+    // already an absolute clean (a FULL is *stronger* — silent-reboot and sleep
+    // paints request it to kill ghosts) and must not be silently downgraded.
     mode = RefreshMode::Half;
   }
 
