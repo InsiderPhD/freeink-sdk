@@ -17,8 +17,11 @@ void testBrightnessRamp(FrontlightManager& light) {
     light.setColorTemperature(warmth);
     light.setBrightness(1);
     const auto minimum = setting();
-    if (warmth == 0) assert((minimum == LightSetting{1, 0, 24, 0}));
-    if (warmth == 100) assert((minimum == LightSetting{0, 5, 0, 31}));
+    // 1% is the driver floor: brightness code 1 at full-scale code 0 (5 mA) on
+    // every lit channel, below stock's dimmest step ({1, 0, 24, 0} / {0, 5, 0, 31}).
+    if (warmth == 0) assert((minimum == LightSetting{1, 0, 0, 0}));
+    if (warmth == 100) assert((minimum == LightSetting{0, 1, 0, 0}));
+    assert(minimum[2] == 0 && minimum[3] == 0);
     const auto start = fakeNow;
     std::array<LightSetting, 100> ramp{};
     unsigned changes = 1;
@@ -32,6 +35,8 @@ void testBrightnessRamp(FrontlightManager& light) {
         for (unsigned channel = 0; channel < 2; ++channel) {
           assert(std::abs(int(setting()[channel]) - int(previous[channel])) <= 4);
         }
+        // Brightness never steps a channel's full-scale current back down.
+        for (unsigned channel = 2; channel < 4; ++channel) assert(setting()[channel] >= previous[channel]);
       }
       assert(Wire.regs[5] <= 31 && Wire.regs[6] <= 31);
       assert(Wire.regs[3] <= 177 && Wire.regs[4] <= 184);
@@ -45,6 +50,10 @@ void testBrightnessRamp(FrontlightManager& light) {
       if (warmth == 100) assert(Wire.regs[3] == 0 && !(Wire.regs[0] & 4));
     }
     assert(changes >= 90);  // previously only eight settings across the whole slider
+    // Stock's dimmest step sits around 22%, and 100% is still stock's maximum.
+    light.setBrightness(22);
+    if (warmth == 0) assert((setting() == LightSetting{1, 0, 23, 0}));
+    light.setBrightness(100);
     if (warmth == 0) assert((setting() == LightSetting{177, 0, 31, 0}));
     if (warmth == 50) assert((setting() == LightSetting{152, 163, 31, 31}));
     if (warmth == 100) assert((setting() == LightSetting{0, 184, 0, 31}));

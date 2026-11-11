@@ -565,17 +565,27 @@ void FrontlightManager::applyPicco() {
   }
   if (!_i2cConfigured && !configurePicco()) return;
 
-  // Spend more of the slider on low light, where a change is easiest to see.
-  const float brightness = (_brightness - 1) / 99.0f;
-  const float step = 9.0f * brightness * std::sqrt(brightness);
+  // Stock's dimmest row (PICCO_FL_LUT[w][0]) still runs the driver at a 23-28 mA
+  // full-scale current (LM3630A: I_FS = 5 mA + 0.75 mA * code), which reads as
+  // bright in a dark room. A synthetic floor row below it keeps stock's channel
+  // on/off pattern but drops the lit channels to brightness code 1 at full-scale
+  // code 0 (5 mA), the dimmest setting the driver can hold. The slider runs
+  // floor -> stock minimum over roughly 1-22% (step < 0) and stock's ten rows
+  // over the rest, still on a t^1.5 curve so the dim end keeps its resolution.
+  const float t = (_brightness - 1) / 99.0f;
+  const float step = 10.0f * t * std::sqrt(t) - 1.0f;  // -1 = floor row, 9 = stock maximum
   const float warmth = (9 * _warmPercent) / 100.0f;
-  const int b = step >= 9 ? 8 : static_cast<int>(step);
+  const int b = step >= 9 ? 8 : static_cast<int>(std::floor(step));  // -1..8
   const int w = warmth >= 9 ? 8 : static_cast<int>(warmth);
   const float bf = step - b;
   const float wf = warmth - w;
+  const auto row = [](int wi, int bi, int field) -> float {
+    if (bi >= 0) return PICCO_FL_LUT[wi][bi][field];
+    return field < 2 ? (PICCO_FL_LUT[wi][0][field] ? 1.0f : 0.0f) : 0.0f;
+  };
   const auto blend = [&](int field) {
-    const float lo = (1 - bf) * PICCO_FL_LUT[w][b][field] + bf * PICCO_FL_LUT[w][b + 1][field];
-    const float hi = (1 - bf) * PICCO_FL_LUT[w + 1][b][field] + bf * PICCO_FL_LUT[w + 1][b + 1][field];
+    const float lo = (1 - bf) * row(w, b, field) + bf * row(w, b + 1, field);
+    const float hi = (1 - bf) * row(w + 1, b, field) + bf * row(w + 1, b + 1, field);
     return static_cast<uint8_t>((1 - wf) * lo + wf * hi + 0.5f);
   };
   // Both channels stay on (PWM >= 1) for warmth 1-99%; a channel switches off
