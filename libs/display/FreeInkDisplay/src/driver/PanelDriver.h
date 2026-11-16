@@ -60,7 +60,19 @@ class PanelDriver {
   virtual void powerOffIdle(EpdBus& bus) { (void)bus; }
   // Called only after the host's complete frame (including grayscale) finishes.
   // Retain controller RAM and the partial-refresh baseline; never reset/sleep.
+  virtual bool supportsBetweenFramePowerOff() const { return false; }
   virtual void powerOffBetweenFrames(EpdBus& bus) { (void)bus; }
+  // Non-blocking HV rail pre-warm before page render while idle-powered-off.
+  virtual bool prewarmPowerOn(EpdBus& bus) {
+    (void)bus;
+    return false;
+  }
+  // Post-settle idle HV rail auto-power-off check; never blocks an active refresh.
+  virtual bool hasIdlePowerWork() const { return false; }
+  virtual bool serviceIdlePower(EpdBus& bus) {
+    (void)bus;
+    return false;
+  }
 
   // --- core paint path (load RAM + refresh) ---
   virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) = 0;
@@ -118,6 +130,11 @@ class PanelDriver {
     (void)bus;
     (void)buf;
   }
+
+  // Paint a B/W rectangle over the last absolute gray image, or restore it (fb == nullptr).
+  // Returns false without painting when no retained image is available. May repaint the full panel.
+  virtual bool displayRetainedGrayscaleOverlay(EpdBus& bus, const uint8_t* fb, uint16_t x, uint16_t y,
+                                               uint16_t w, uint16_t h) { return false; }
 
   // --- grayscale (dual-plane LSB/MSB) ---
   virtual GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const {
@@ -189,12 +206,52 @@ class PanelDriver {
     (void)yStart;
     (void)numRows;
   }
+  // Stream an entire grayscale plane inside a single scoped SPI transaction
+  // (UC8253 DTM1/DTM2 without PTIN/PTL/PTOUT). `nextChunk(ctx, &outChunk)` must
+  // emit contiguous bytes in bottom-up gate order (gate 0 = logical row H - 1
+  // up to gate H - 1 = logical row 0, `H * widthBytes` bytes total) purely from
+  // RAM without performing any SPI/storage I/O, returning 0 at end-of-plane.
+  virtual bool supportsGrayscaleGateStream() const { return false; }
+  virtual bool writeGrayscalePlaneGateStream(EpdBus& bus, GrayPlane plane, void* ctx,
+                                             size_t (*nextChunk)(void* ctx, const uint8_t** outChunk)) {
+    (void)bus;
+    (void)plane;
+    (void)ctx;
+    (void)nextChunk;
+    return false;
+  }
   virtual void prepareGrayscaleTarget(const uint8_t* bw) { (void)bw; }
   virtual void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) {
     (void)lut;
     (void)factoryMode;
     display(bus, fb, nullptr, RefreshMode::Fast, turnOff);
   }
+  // Two-pass 16-gray refresh and differential DTM1 cleanup (UC8253 X3).
+  virtual bool supportsGray16() const { return false; }
+  virtual bool supportsDeferredGray16Base() const { return false; }
+  virtual void displayGray16Base(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff = false) {
+    displayGrayscaleBase(bus, fb, fallback, turnOff);
+  }
+  virtual bool displayGray16BaseStart(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff = false) {
+    displayGray16Base(bus, fb, fallback, turnOff);
+    return false;
+  }
+  virtual void displayGray16Pass1(EpdBus& bus) { (void)bus; }
+  virtual bool displayGray16Pass1Start(EpdBus& bus) {
+    displayGray16Pass1(bus);
+    return false;
+  }
+  virtual void displayGray16Pass2(EpdBus& bus, bool turnOff) {
+    (void)bus;
+    (void)turnOff;
+  }
+  virtual bool displayGray16Pass2Start(EpdBus& bus, bool turnOff) {
+    displayGray16Pass2(bus, turnOff);
+    return false;
+  }
+  virtual void beginGray16Cleanup(EpdBus& bus, const uint8_t* bw) { cleanupGrayscaleBuffers(bus, bw); }
+  virtual void finishGray16Cleanup(EpdBus& bus) { (void)bus; }
+  virtual bool isGray16CleanupActive() const { return false; }
   // Diagnostic four-gray comparison. The full frame is first rendered with
   // the controller's flashing OTP waveform; `custom*` is then rebuilt with the
   // driver's non-flashing grayscale path. Default drivers keep the OTP frame.
@@ -213,6 +270,24 @@ class PanelDriver {
 
   // --- optional, controller-specific hooks (no-op by default) ---
   virtual void requestResync(uint8_t settlePasses) { (void)settlePasses; }
+  // True while the host presents book pages; drivers with a reading waveform use it.
+  virtual void setReaderRefresh(bool reading) { (void)reading; }
+  // One-shot host work to run while a page-turn waveform drives the panel,
+  // when the CPU would otherwise only poll BUSY. The hook lasts for exactly one
+  // display call: set it right before display() or displayGray(); a driver
+  // that takes it calls it at most once during that call, on the calling
+  // thread, after the waveform has started, and clears it before the call
+  // returns whether or not it ran. Not every refresh runs it.
+  // The hook must not touch the bus or the display, and must not write the
+  // display's frame buffer: it draws only into buffers of its own. It runs
+  // inside the display call, so with FreeInkDisplay's power-management lock
+  // held and with whatever locks the host holds around its display calls; a
+  // hook that takes one of those, or waits on something that does, deadlocks.
+  // Default: ignored, the hook never runs.
+  virtual void setRefreshIdleHook(void (*hook)(void* ctx), void* ctx) {
+    (void)hook;
+    (void)ctx;
+  }
   virtual void skipInitialResync() {}
   // Content-polarity hint: true while the facade is rendering inverted (dark
   // background) frames. Differential drivers idle unchanged pixels, so on a
@@ -227,6 +302,10 @@ class PanelDriver {
   // border follows a waveform may drive it black while this is set so the page
   // is not framed in white. Takes effect on the next refresh that drives it.
   virtual void setDarkBorder(bool dark) { (void)dark; }
+
+  // Overlay grayscale masks may follow an inverted B/W page. The masks keep
+  // their normal encoding; the facade inverts only B/W frames.
+  virtual bool grayscaleWhileInverted() const { return false; }
   // Capture the cancellation generation at the start of a logical UI render.
   // This must happen before CPU-side composition: input arriving while an old
   // frame is being composed must still cancel its optional post-refresh work.

@@ -6,8 +6,8 @@
 #endif
 
 #if FREEINK_CAP_FRONTLIGHT
-#include <M5Pm1.h>
 #include <I2cBusLock.h>
+#include <M5Pm1.h>
 #include <Wire.h>
 #include <driver/gpio.h>  // gpio_hold_en/dis in prepareForDeepSleep()/begin()
 
@@ -28,7 +28,7 @@
 // to the firmware Serial and the crash-report ring buffer.
 #include <Logging.h>
 #if FREEINK_DEVICE_EEGO_A4
-#include <esp_mac.h>
+#include <EegoDeviceId.h>
 
 #include "EegoUnlitUnits.h"
 #endif
@@ -72,7 +72,8 @@ void pm1FrontlightAttach(uint32_t freqHz) {
 }
 
 void pm1FrontlightWrite(uint32_t pct) {
-  const uint32_t duty = (pct * pct * 4095u) / 10000u;  // 0-100% -> 12-bit, gamma ~2
+  uint32_t duty = (pct * pct * 4095u) / 10000u;  // 0-100% -> 12-bit, gamma ~2
+  if (pct && !duty) duty = 1;                    // 1% stays lit, as on the LEDC path
   const uint8_t data[2] = {static_cast<uint8_t>(duty & 0xFF),
                            static_cast<uint8_t>(((duty >> 8) & 0x0F) | (duty ? PM1_PWM_ENABLE : 0))};
   freeink::m5pm1::writeBytes(freeink::m5pm1::REG_PWM0_DUTY_L, data, sizeof(data));
@@ -204,9 +205,8 @@ void FrontlightManager::begin() {
     digitalWrite(i2c.enable, LOW);
     if (!detected) return;
     // The controller is fitted on some unlit units too; stock lists those.
-    uint8_t mac[6] = {};
-    if (esp_efuse_mac_get_default(mac) == ESP_OK &&
-        freeink::eegoA4UidHasNoFrontlight(static_cast<uint32_t>(mac[3]) << 16 | mac[4] << 8 | mac[5])) {
+    uint32_t uid = 0;
+    if (freeink::readEegoA4Uid(uid) && freeink::eegoA4UidHasNoFrontlight(uid)) {
       return;
     }
 
@@ -780,6 +780,7 @@ void FrontlightManager::setBrightnessLevel(uint8_t level) {
 #if FREEINK_CAP_FRONTLIGHT
   _brightnessLevel = level;
   _brightness = (static_cast<uint16_t>(level) * 100u) / 255u;
+  if (level && !_brightness) _brightness = 1;  // backends treat 0% as off
   _useLevel = true;
   apply();
 #else

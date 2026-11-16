@@ -25,8 +25,10 @@ constexpr uint8_t A4_UC8279C_LUT_24[A4_UC8279C_LUT_LENGTH] = {
 
 // Stock V1.0.3 production fast (DU) waveform, "DU-factory-previous": one
 // 36-frame phase per record (pixels changing to white or black are driven
-// there; pixels staying black are re-driven black; pixels staying white are
-// not driven). The rest of each 49-byte record is zero.
+// there, pixels staying black are driven black again, and pixels staying white
+// are not driven). The rest of each 49-byte record is zero. With the
+// staying-black record (0x24) set to hold instead, black pixels kept from the
+// previous screen showed lighter than newly driven ones in dithered areas.
 constexpr uint8_t A4_UC8279C_FAST_LUT_20[A4_UC8279C_LUT_LENGTH] = {0x01, 0x32, 0x00, 0x00, 0x00, 0x01, 0x01};
 constexpr uint8_t A4_UC8279C_FAST_LUT_21[A4_UC8279C_LUT_LENGTH] = {0x01, 0x24, 0x00, 0x00, 0x00, 0x01, 0x01};
 constexpr uint8_t A4_UC8279C_FAST_LUT_22[A4_UC8279C_LUT_LENGTH] = {0x01, 0xa4, 0x00, 0x00, 0x00, 0x01, 0x01};
@@ -78,5 +80,13 @@ constexpr uint8_t A4_UC8279C_GRAY3_TRANSITION_LUT[5][A4_UC8279C_GRAY3_RECORD_LEN
 constexpr uint8_t A4_UC8279C_GRAY3_NO_WHITE_CLEAR = 0x90;
 constexpr uint8_t A4_UC8279C_GRAY3_NO_BLACK_DRIVE = 0x4e;
 constexpr uint8_t A4_UC8279C_GRAY3_NO_BLACK_GRAY = 0x09;
+// Not from stock: two gray levels. Light gray drives black for the light
+// frames in place of the 5 in record 0x23 above (the record's hold phase takes
+// up the difference); dark gray gets the extra frames on top, in the same
+// refresh after a B/W base and in a short second refresh otherwise, which then
+// holds for the settle frames. More frames are darker.
+constexpr uint8_t A4_UC8279C_GRAY3_LIGHT_FRAMES = 3;
+constexpr uint8_t A4_UC8279C_GRAY3_DARK_EXTRA_FRAMES = 2;
+constexpr uint8_t A4_UC8279C_GRAY3_DARK_SETTLE_FRAMES = 4;
 
 }  // namespace freeink

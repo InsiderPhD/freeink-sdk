@@ -34,8 +34,13 @@ sh libs/book/FreeInkBook/test/host/run.sh
 sh libs/book/ContentProtection/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run_metalio.sh
+sh libs/hardware/InputManager/test/host/run_papermono.sh
 sh libs/hardware/HapticManager/test/host/run.sh
 ```
+
+The Paper Mono input suite disables touch and models PMIC click reports. It checks
+that delayed polling does not lengthen clicks and that two-button Power chords
+retain their hold duration, including clicks that overlap a chord.
 
 The book suite also needs `zip`. It uses `sips` or ImageMagick's `convert` for
 JPEG fixtures and optionally Pillow for progressive JPEG fixtures; the related
@@ -100,6 +105,7 @@ the configuration file, so the sensor's data path still needs a device.
 ```sh
 sh libs/font/FreeInkFont/test/host/run.sh
 sh libs/font/FreeInkFont/test/host/run_ligature.sh
+sh libs/font/FreeInkFont/test/host/run_gpos.sh
 ```
 
 Covers `FtFont::RenderOptions` (every `HintingMode` plus monochrome) against a
@@ -111,6 +117,11 @@ Covers `FtFont::ligature()`/`ligatureGlyphId()` (GSUB-based) against a real
 bundled font: exact-value assertions for the five standard Latin ligatures,
 the codepoint-vs-glyph-ID contract boundary, deinit()/re-init cache
 invalidation, and a null-pointer safety check on `Gsub::LigatureGlyphId`.
+
+The GPOS suite covers pair formats and extension lookups, GDEF-based LookupFlag
+filtering (glyph classes, mark attachment classes, and mark filtering sets), and
+truncated/corrupt tables under ASan/UBSan. It checks resident and streamed kerning,
+the combined GPOS/GDEF stream budget, and cache release/reinitialization.
 
 ## BLE HID host
 
@@ -146,6 +157,7 @@ python3 libs/display/FreeInkDisplay/test/host/run_pro.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279c_a4.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8253_power.py
+python3 libs/display/FreeInkDisplay/test/host/run_uc8253_murphy.py
 python3 libs/display/FreeInkDisplay/test/host/run_picco.py
 ```
 
@@ -156,7 +168,9 @@ independently of board metadata. The Picco suite builds the
 SSD1677/SSD2677 drivers as a Picco and as a Sticky, including each board's
 bit-banged panel probe. The checks cover transfer
 sequences, grayscale uploads, refresh lifecycle, and power-state behavior for
-the drivers included in each harness.
+the drivers included in each harness, including UC8253 X3 two-pass 16-gray, PTL
+sub-window sync, idle HV power-off, gate-order plane streaming, and 256-byte bus
+plane flips.
 
 For the board-profile and display-probe regression test, follow the
 [XteinkDetect host instructions](../libs/hardware/XteinkDetect/test/host/README.md).
@@ -203,3 +217,15 @@ sh libs/network/JsonSax/test/host/run.sh
 
 Checks optional bounded string prefixes, unchanged default overflow handling,
 continued parsing after long strings, and rejection of oversized keys under ASan/UBSan.
+
+## OPDS authentication
+
+```sh
+sh libs/network/Opds/test/host/run.sh
+```
+
+Requires host Expat headers and library. Runs the production OPDS client and
+parsers with a scripted transport under ASan/UBSan. Covers public Atom browsing
+with protected acquisitions, Basic challenge headers and OPDS documents, rejected
+credentials, OAuth login/refresh, and cross-origin challenge rejection. Device
+tests must still verify the consumer's download retry, cancellation, and heap.
