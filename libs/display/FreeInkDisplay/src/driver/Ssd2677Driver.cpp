@@ -942,6 +942,7 @@ bool Ssd2677Driver::finishGray16Text(EpdBus& bus, const uint8_t* levels, bool tu
 }
 
 void Ssd2677Driver::sendCrossCodes(EpdBus& bus, const uint8_t* oldLevels, const uint8_t* base, const uint8_t* soft) {
+  settle(bus);
   const PanelGeometry g = geometry();
   uint8_t* const chunk = g_txChunk;
   bus.cmd(CMD_DATA);
