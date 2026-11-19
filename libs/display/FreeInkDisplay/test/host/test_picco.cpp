@@ -571,7 +571,7 @@ static void expectGray16Image(Ssd2677Driver& s) {
 
   EpdBus bus;
   assert(s.supportsGray16Image());
-  assert(s.displayGray16Image(bus, levels.data(), true));
+  assert(s.displayGray16Image(bus, levels.data(), RefreshMode::Half, true));
   // The runtime builder reproduces picco-gray-cal's tables for the defaults.
   assert(Bytes(s._lutCoarse, s._lutCoarse + 535) == asBytes(lut_picco_se0400_gray16_ref_coarse));
   assert(Bytes(s._lutPull, s._lutPull + 535) == asBytes(lut_picco_se0400_gray16_ref_pull));
@@ -633,13 +633,13 @@ static void expectGray16Image(Ssd2677Driver& s) {
     };
     assert(s.setGray16Turn(2));
     bus.clear();
-    assert(s.displayGray16Image(bus, levels.data(), true, true));  // nothing up yet: full path
+    assert(s.displayGray16Image(bus, levels.data(), RefreshMode::Fast, true));  // nothing up yet: full path
     assert(hasFull(bus));
     for (int turn = 0; turn < 2; ++turn) {
       const Bytes& next = turn ? levels : reversed;
       const Bytes& prev = turn ? reversed : levels;
       bus.clear();
-      assert(s.displayGray16Image(bus, next.data(), true, true));
+      assert(s.displayGray16Image(bus, next.data(), RefreshMode::Fast, true));
       assert(!hasFull(bus));
       assert(lutsOf(bus) ==
              std::vector<Bytes>({asBytes(s._lutDissolve), asBytes(s._lutCoarse), asBytes(s._lutPull)}));
@@ -650,7 +650,7 @@ static void expectGray16Image(Ssd2677Driver& s) {
       }
     }
     bus.clear();
-    assert(s.displayGray16Image(bus, levels.data(), true, true));  // third turn: the scrub
+    assert(s.displayGray16Image(bus, levels.data(), RefreshMode::Fast, true));  // third turn: the scrub
     assert(hasFull(bus));
     assert(s.setGray16Turn(0));
   }
@@ -685,7 +685,7 @@ static void expectGray16Image(Ssd2677Driver& s) {
   Ssd2677Driver fresh;
   bus.clear();
   fakeHeapCapsFail = true;
-  assert(!fresh.displayGray16Image(bus, levels.data(), true));
+  assert(!fresh.displayGray16Image(bus, levels.data(), RefreshMode::Half, true));
   fakeHeapCapsFail = false;
   assert(bus.writes.empty());
 }
