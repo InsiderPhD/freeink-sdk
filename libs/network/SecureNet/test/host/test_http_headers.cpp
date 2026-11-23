@@ -78,8 +78,23 @@ static void testUrls() {
     assert(http.responseComplete());
   }
 }
+// A hop that cannot connect records "connect" and the host it was dialing:
+// after a redirect, the redirect's target, which is what a blocked CDN looks like.
+static void testConnectFailureNamesHost() {
+  reset({"HTTP/1.1 302 Found\r\nLocation: https://cdn.example/f\r\nContent-Length: 0\r\n\r\n"});
+  freeink::SecureHttpClient http;
+  http.setFollowRedirects(5);
+  assert(http.begin("https://origin.example/f"));
+  assert(http.GET() == -1);  // the second connect has no scripted reply: refused
+  const auto& diag = http.lastFailure();
+  assert(std::string(diag.stage) == "connect");
+  assert(std::string(diag.host) == "cdn.example");
+  assert(FakeNet::hosts().size() == 1 && FakeNet::hosts()[0] == "origin.example");
+}
+
 int main() {
   testUrls();
+  testConnectFailureNamesHost();
   // Buffered cap includes CR, excludes LF, preserving the existing boundary.
   for (size_t n : {4094, 4095, 4096, 4097, 4173}) {
     check(status + field("X-Ordinary", n) + "\r\n" + end, n <= 4095);

@@ -88,6 +88,13 @@ class SecureClient : public Client {
   // True if the library was built with wolfSSL TLS 1.3 support enabled.
   static bool tls13Available();
 
+  // Why the last connect() failed, for diagnostics: "dns", "tcp", "ctx-alloc",
+  // "ssl-alloc", "tls" (the peer or wolfSSL refused the handshake),
+  // "tls-timeout", "aborted"; "" after a successful connect. lastTlsError() is
+  // wolfSSL_get_error()'s code for "tls" / "tls-timeout", else 0.
+  const char* lastFailStage() const { return _failStage; }
+  int lastTlsError() const { return _tlsError; }
+
  private:
   int connectWithMethod(const char* host, uint16_t port, void* method, const char* label);
 
@@ -98,6 +105,8 @@ class SecureClient : public Client {
   WiFiClient _transport;
   AbortCallback _shouldAbort;
   bool _aborted = false;
+  const char* _failStage = "";
+  int _tlsError = 0;
   bool _tcpConnected = false;  // the last connectWithMethod() reached the handshake
   const char* _rootCA = nullptr;
   bool _insecure = false;

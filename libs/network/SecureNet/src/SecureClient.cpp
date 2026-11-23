@@ -84,11 +84,15 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   const uint32_t started = millis();
   stop();
   const uint32_t timeoutMs = getTimeout();
-  if (abortRequested()) return 0;
+  if (abortRequested()) {
+    _failStage = "aborted";
+    return 0;
+  }
   _transport.setConnectionTimeout(timeoutMs);
   _tcpConnected = false;
   if (!_transport.connect(host, port)) {
     if (Serial) Serial.printf("[SecureClient] TCP connect failed (%s): %s:%u\n", label, host, port);
+    _failStage = "tcp";
     return 0;
   }
   _tcpConnected = true;
@@ -101,6 +105,7 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   if (!ctx) {
     if (Serial) Serial.printf("[SecureClient] CTX alloc failed (%s), free heap %u\n", label, (unsigned)ESP.getFreeHeap());
     _transport.stop();
+    _failStage = "ctx-alloc";
     return 0;
   }
   _ctx = ctx;
@@ -118,6 +123,7 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   if (!ssl) {
     if (Serial) Serial.printf("[SecureClient] SSL alloc failed (%s), free heap %u\n", label, (unsigned)ESP.getFreeHeap());
     stop();
+    _failStage = "ssl-alloc";
     return 0;
   }
   _ssl = ssl;
@@ -156,11 +162,14 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
     if (!isWantIo(err)) {
       if (Serial) Serial.printf("[SecureClient] wolfSSL_connect failed (%s): %d\n", label, err);
       stop();
+      _failStage = "tls";
+      _tlsError = err;
       return 0;
     }
     if (abortRequested()) {
       if (Serial) Serial.printf("[SecureClient] handshake aborted by caller (%s)\n", label);
       stop();
+      _failStage = "aborted";
       return 0;
     }
     if (static_cast<int32_t>(millis() - deadline) >= 0) {
@@ -169,11 +178,15 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
                       _transport.connected() ? "up" : "down", (unsigned)ESP.getFreeHeap());
       }
       stop();
+      _failStage = "tls-timeout";
+      _tlsError = err;
       return 0;
     }
     delay(5);
   }
   _connected = true;
+  _failStage = "";
+  _tlsError = 0;
   if (Serial) {
     Serial.printf("[SecureClient] handshake ok (%s): %s / %s in %lu ms\n", label, wolfSSL_get_version(ssl),
                   wolfSSL_get_cipher(ssl), (unsigned long)(millis() - started));
@@ -214,8 +227,17 @@ bool SecureClient::abortRequested() {
 
 int SecureClient::connect(const char* host, uint16_t port) {
   _aborted = false;
+  _failStage = "";
+  _tlsError = 0;
   stop();
-  if (abortRequested() || !hostResolves(host)) return 0;
+  if (abortRequested()) {
+    _failStage = "aborted";
+    return 0;
+  }
+  if (!hostResolves(host)) {
+    _failStage = "dns";
+    return 0;
+  }
   // Negotiate the highest mutually supported version rather than pinning TLS 1.3:
   // self-hosted / Let's Encrypt nginx often tops out at TLS 1.2, and a 1.3-only
   // client fails those handshakes outright. v23 still selects 1.3 when the peer

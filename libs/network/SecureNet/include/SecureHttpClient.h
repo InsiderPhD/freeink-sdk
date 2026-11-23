@@ -238,7 +238,16 @@ class SecureHttpClient {
     // connect() is fresh until a response has completed on it.
     for (int attempt = 0; attempt < 2; ++attempt) {
       if (isAborted(shouldAbort)) return -1;
-      if (!ensureConnected(shouldAbort)) return -1;
+      if (!ensureConnected(shouldAbort)) {
+        recordFailure("connect", 0, std::string(), false);
+        if (_scheme == "https") {
+          _lastFailure.connectStage = _secure.lastFailStage();
+          _lastFailure.tlsError = _secure.lastTlsError();
+        } else {
+          _lastFailure.connectStage = _plainFailStage;
+        }
+        return -1;
+      }
       // Read after ensureConnected(): if it had to reconnect, it cleared the flag.
       const bool reusing = _connKeptAlive;
 
@@ -373,6 +382,12 @@ class SecureHttpClient {
     bool connected = false;
     bool reusedConnection = false;
     char partial[40] = {};
+    // The host this hop was talking to (after any redirect), and for a
+    // "connect" failure why it failed (SecureClient::lastFailStage, or
+    // "dns" / "tcp" for plain http) and wolfSSL's error code.
+    char host[64] = {};
+    const char* connectStage = "";
+    int tlsError = 0;
   };
   const Diagnostics& lastFailure() const { return _lastFailure; }
 
@@ -579,7 +594,14 @@ class SecureHttpClient {
     } else {
       _plain.setTimeout(_timeoutMs);
       _plain.setConnectionTimeout(_timeoutMs);
-      if (!hostResolves(_host.c_str()) || !_plain.connect(_host.c_str(), _port)) return false;
+      if (!hostResolves(_host.c_str())) {
+        _plainFailStage = "dns";
+        return false;
+      }
+      if (!_plain.connect(_host.c_str(), _port)) {
+        _plainFailStage = "tcp";
+        return false;
+      }
       _conn = &_plain;
       _connHttps = false;
     }
@@ -665,9 +687,13 @@ class SecureHttpClient {
     _lastFailure.reusedConnection = reused;
     snprintf(_lastFailure.partial, sizeof(_lastFailure.partial), "%.*s",
              static_cast<int>(sizeof(_lastFailure.partial) - 1), partial.c_str());
+    snprintf(_lastFailure.host, sizeof(_lastFailure.host), "%s", _host.c_str());
+    _lastFailure.connectStage = "";
+    _lastFailure.tlsError = 0;
   }
 
   Diagnostics _lastFailure;
+  const char* _plainFailStage = "";
 
   // Reads one CRLF-terminated line (CR stripped). Returns false on timeout, a
   // closed connection with no pending data, or an over-long line.
