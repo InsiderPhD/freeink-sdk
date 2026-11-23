@@ -94,6 +94,14 @@ class SecureClient : public Client {
   // wolfSSL_get_error()'s code for "tls" / "tls-timeout", else 0.
   const char* lastFailStage() const { return _failStage; }
   int lastTlsError() const { return _tlsError; }
+  // wolfSSL's text for lastTlsError() ("" when none), and the TLS alert the
+  // peer last sent during that handshake (-1 when none): a server or filter
+  // that refuses the handshake usually says why in an alert.
+  const char* lastTlsErrorString() const { return _tlsErrorString; }
+  int lastAlertReceived() const { return _alertRx; }
+  // Protocol and cipher of the last successful handshake ("" before one).
+  const char* lastTlsVersion() const { return _tlsVersion; }
+  const char* lastTlsCipher() const { return _tlsCipher; }
 
  private:
   int connectWithMethod(const char* host, uint16_t port, void* method, const char* label);
@@ -107,6 +115,12 @@ class SecureClient : public Client {
   bool _aborted = false;
   const char* _failStage = "";
   int _tlsError = 0;
+  const char* _tlsErrorString = "";
+  int _alertRx = -1;
+  const char* _tlsVersion = "";
+  const char* _tlsCipher = "";
+  // Records lastTlsErrorString()/lastAlertReceived() for `err` before stop().
+  void noteTlsFailure(void* ssl, int err);
   bool _tcpConnected = false;  // the last connectWithMethod() reached the handshake
   const char* _rootCA = nullptr;
   bool _insecure = false;

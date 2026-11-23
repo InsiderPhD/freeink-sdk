@@ -90,6 +90,10 @@ static void testConnectFailureNamesHost() {
   assert(std::string(diag.stage) == "connect");
   assert(std::string(diag.host) == "cdn.example");
   assert(FakeNet::hosts().size() == 1 && FakeNet::hosts()[0] == "origin.example");
+  // The hop trace: the origin's redirect, then the refused CDN.
+  assert(http.hopCount() == 2);
+  assert(std::string(http.hops()[0].host) == "origin.example" && http.hops()[0].status == 302);
+  assert(std::string(http.hops()[1].host) == "cdn.example" && http.hops()[1].status == -1);
 }
 
 int main() {

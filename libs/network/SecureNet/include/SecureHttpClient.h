@@ -172,8 +172,18 @@ class SecureHttpClient {
     std::string activeMethod = method;
     const uint8_t* activePayload = payload;
     size_t activePayloadLen = payloadLen;
+    _hopCount = 0;
     for (int hop = 0;; ++hop) {
+      const unsigned long hopStart = millis();
       const int status = sendRequestOnce(activeMethod.c_str(), activePayload, activePayloadLen, onData, shouldAbort);
+      if (_hopCount < MAX_HOPS) {
+        Hop& h = _hops[_hopCount++];
+        snprintf(h.host, sizeof(h.host), "%s", _host.c_str());
+        h.status = status;
+        const unsigned long ms = millis() - hopStart;
+        h.ms = static_cast<uint16_t>(ms > 65535 ? 65535 : ms);
+        h.tls = (_scheme == "https" && status >= 0) ? _secure.lastTlsVersion() : "";
+      }
       if (status < 0 || hop >= _followRedirects || !isRedirectStatus(status)) return status;
 
       const std::string location = getHeader("location");
@@ -243,6 +253,8 @@ class SecureHttpClient {
         if (_scheme == "https") {
           _lastFailure.connectStage = _secure.lastFailStage();
           _lastFailure.tlsError = _secure.lastTlsError();
+          _lastFailure.tlsErrorString = _secure.lastTlsErrorString();
+          _lastFailure.tlsAlert = _secure.lastAlertReceived();
         } else {
           _lastFailure.connectStage = _plainFailStage;
         }
@@ -388,7 +400,21 @@ class SecureHttpClient {
     char host[64] = {};
     const char* connectStage = "";
     int tlsError = 0;
+    const char* tlsErrorString = "";
+    int tlsAlert = -1;  // TLS alert the peer sent, -1 = none
   };
+
+  // Every hop of the last request, redirects included: host, status (-1 =
+  // failed before one), time, and the TLS protocol it ran on.
+  struct Hop {
+    char host[48] = {};
+    int status = 0;
+    uint16_t ms = 0;
+    const char* tls = "";
+  };
+  static constexpr uint8_t MAX_HOPS = 8;
+  const Hop* hops() const { return _hops; }
+  uint8_t hopCount() const { return _hopCount; }
   const Diagnostics& lastFailure() const { return _lastFailure; }
 
   const std::string& getString() const { return _body; }
@@ -690,7 +716,12 @@ class SecureHttpClient {
     snprintf(_lastFailure.host, sizeof(_lastFailure.host), "%s", _host.c_str());
     _lastFailure.connectStage = "";
     _lastFailure.tlsError = 0;
+    _lastFailure.tlsErrorString = "";
+    _lastFailure.tlsAlert = -1;
   }
+
+  Hop _hops[MAX_HOPS];
+  uint8_t _hopCount = 0;
 
   Diagnostics _lastFailure;
   const char* _plainFailStage = "";

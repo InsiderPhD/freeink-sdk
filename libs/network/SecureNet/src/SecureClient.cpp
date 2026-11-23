@@ -71,6 +71,14 @@ bool isWantIo(const int err) {
 }
 }  // namespace
 
+void SecureClient::noteTlsFailure(void* sslPtr, const int err) {
+  auto* ssl = static_cast<WOLFSSL*>(sslPtr);
+  const char* text = wolfSSL_ERR_reason_error_string(static_cast<unsigned long>(err < 0 ? -err : err));
+  _tlsErrorString = text ? text : "";
+  WOLFSSL_ALERT_HISTORY history;
+  _alertRx = (ssl && wolfSSL_get_alert_history(ssl, &history) == WOLFSSL_SUCCESS) ? history.last_rx.code : -1;
+}
+
 int SecureClient::connectWithMethod(const char* host, uint16_t port, void* method, const char* label) {
 #if defined(FREEINK_WOLFSSL_DEBUG)
   // Routes wolfSSL's internal trace through wolfSSL_Arduino_Serial_Print (the
@@ -160,7 +168,11 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   while ((ret = wolfSSL_connect(ssl)) != WOLFSSL_SUCCESS) {
     const int err = wolfSSL_get_error(ssl, ret);
     if (!isWantIo(err)) {
-      if (Serial) Serial.printf("[SecureClient] wolfSSL_connect failed (%s): %d\n", label, err);
+      noteTlsFailure(ssl, err);
+      if (Serial) {
+        Serial.printf("[SecureClient] wolfSSL_connect failed (%s): %d %s, alert rx %d\n", label, err, _tlsErrorString,
+                      _alertRx);
+      }
       stop();
       _failStage = "tls";
       _tlsError = err;
@@ -177,6 +189,7 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
         Serial.printf("[SecureClient] handshake timeout (%s): last err %d, transport %s, free heap %u\n", label, err,
                       _transport.connected() ? "up" : "down", (unsigned)ESP.getFreeHeap());
       }
+      noteTlsFailure(ssl, err);
       stop();
       _failStage = "tls-timeout";
       _tlsError = err;
@@ -187,6 +200,8 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   _connected = true;
   _failStage = "";
   _tlsError = 0;
+  _tlsVersion = wolfSSL_get_version(ssl);
+  _tlsCipher = wolfSSL_get_cipher(ssl);
   if (Serial) {
     Serial.printf("[SecureClient] handshake ok (%s): %s / %s in %lu ms\n", label, wolfSSL_get_version(ssl),
                   wolfSSL_get_cipher(ssl), (unsigned long)(millis() - started));
@@ -229,6 +244,8 @@ int SecureClient::connect(const char* host, uint16_t port) {
   _aborted = false;
   _failStage = "";
   _tlsError = 0;
+  _tlsErrorString = "";
+  _alertRx = -1;
   stop();
   if (abortRequested()) {
     _failStage = "aborted";
