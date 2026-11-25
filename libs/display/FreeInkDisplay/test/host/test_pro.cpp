@@ -13,6 +13,7 @@
 #include "src/lut/Ssd1677Luts.h"
 #include "src/lut/X4ProTextAaLuts.h"
 #include "src/lut/X4ProImageLuts.h"
+#include "src/lut/Uc8179Gray16Luts.h"
 #undef private
 
 using namespace freeink;
@@ -1093,6 +1094,81 @@ static void testNonX3FacadeParity() {
   if constexpr (!std::is_same_v<Driver, Ssd1677Driver>) free(driver._grayBase);
 }
 
+// 16-level images on the X4 Pro (jpirnay's port): a full-refresh base and two table passes carrying
+// lut/Uc8179Gray16Luts.h's tables and registers byte for byte. A uniform level buffer makes every pixel take one
+// path, so each plane is uniform too. Our pin has no 8-bit canvas: the levels come in 4 bpp from the host.
+static std::vector<size_t> writesAt(const EpdBus& bus, uint8_t command) {
+  std::vector<size_t> at;
+  for (size_t i = 0; i < bus.writes.size(); ++i)
+    if (bus.writes[i].command == command) at.push_back(i);
+  return at;
+}
+static bool visibleRowsAre(const Bytes& plane, uint8_t value) {
+  if (plane.size() < 48000) return false;
+  for (size_t i = 0; i < 48000; ++i)
+    if (plane[i] != value) return false;
+  return true;
+}
+static void testUc8179Gray16Image() {
+  namespace g = freeink::uc8179_gray16;
+  Uc8179Driver d;
+  EpdBus bus;
+  d.begin(bus);
+  assert(d.supportsGray16Image());
+  const int16_t* lstar = d.gray16LevelLstar();
+  assert(lstar && lstar[0] == 749 && lstar[15] == 165);
+  for (int l = 1; l < 16; ++l) assert(lstar[l] < lstar[l - 1]);  // strictly falling, 0 = lightest
+  assert(d.gray16DeepLevels() == 0 && d.gray16TextSoftLevel() == -1);  // no text-turn API on this panel
+  std::vector<uint8_t> levels(800 * 480 / 2);
+  for (const uint8_t level : {uint8_t{0}, uint8_t{15}, uint8_t{7}}) {
+    std::fill(levels.begin(), levels.end(), static_cast<uint8_t>(level << 4 | level));
+    bus.clear();
+    assert(d.displayGray16Image(bus, levels.data(), RefreshMode::Half, true));
+    const g::Path& path = g::kPaths[level];
+    // The base: one full refresh of the base plane.
+    const auto dtm2 = writesAt(bus, 0x13);
+    assert(dtm2.size() == 3);
+    assert(visibleRowsAre(bus.writes[dtm2[0]].bytes, path.whiteBase ? 0xFF : 0x00));
+    // Two passes: DTM1 = code bit 1, DTM2 = code bit 0, then the pass's tables and registers.
+    const auto tables = writesAt(bus, 0x21);
+    assert(tables.size() == 2);
+    const auto dtm1 = writesAt(bus, 0x10);
+    for (int pass = 0; pass < 2; ++pass) {
+      const uint8_t code = pass == 0 ? path.pass1 : path.pass2;
+      const uint8_t* want = pass == 0 ? g::kPass1Tables : g::kPass2Tables;
+      size_t red = 0, bw = 0;
+      for (size_t i : dtm1)
+        if (i < tables[pass] && (pass == 0 || i > tables[0])) red = i;
+      for (size_t i : dtm2)
+        if (i < tables[pass] && (pass == 0 || i > tables[0])) bw = i;
+      assert(red && bw);
+      assert(visibleRowsAre(bus.writes[red].bytes, (code & 2) ? 0xFF : 0x00));
+      assert(visibleRowsAre(bus.writes[bw].bytes, (code & 1) ? 0xFF : 0x00));
+      for (unsigned t = 0; t < 5; ++t) {
+        bool sent = false;
+        for (size_t i = tables[pass] - 1; i < bus.writes.size() && i < tables[pass] + 6; ++i)
+          if (bus.writes[i].command == 0x20 + t)
+            sent = bus.writes[i].bytes == Bytes(want + t * g::kTableLen, want + (t + 1) * g::kTableLen);
+        assert(sent);
+      }
+    }
+    // Pass 1 at 200 Hz on the controller's voltages; pass 2 at 200 Hz with VDL lowered to 8.4 V.
+    assert(writesAt(bus, 0x30).size() == 2 && !writesAt(bus, 0x01).empty());
+    assert(lastRegister(bus, 0x30) == 0x0F);
+    bool lowered = false;
+    for (const auto& w : bus.writes)
+      if (w.command == 0x01 && w.bytes == Bytes{0x07, 0x17, 0x3A, 0x1E, 0x03}) lowered = true;
+    assert(lowered);
+    assert(d._needFullClear && !d._oldPlaneValid && !d._isScreenOn);
+  }
+  // Not an X4 Pro: refused, nothing sent.
+  BoardConfig::ACTIVE.board = BoardConfig::Board::XteinkX4Classic;
+  bus.clear();
+  assert(!d.supportsGray16Image() && !d.gray16LevelLstar());
+  assert(!d.displayGray16Image(bus, levels.data(), RefreshMode::Half, true) && bus.writes.empty());
+  BoardConfig::ACTIVE.board = BoardConfig::Board::XteinkX4Pro;
+}
+
 int main(int argc, char** argv) {
   if (argc > 1 && std::strcmp(argv[1], "metalio") == 0) {
     testMetalio();
@@ -1124,6 +1200,7 @@ int main(int argc, char** argv) {
   testDeferredGrayBase();
   testDeferredGrayFacadeUsesCurrentDrawFrame();
   testUc8179GrayShadeSplit();
+  testUc8179Gray16Image();
   testUc8279X4WaveformSelection();
   testDirectSleep<Uc8179Driver>();
   testDirectSleep<Uc8279X4Driver>();
