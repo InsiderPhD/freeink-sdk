@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix="freeink-pro-test-") as directory:
     for inc_header in (LIB / "include").glob("*.h"):
         shutil.copy2(inc_header, root / "include" / inc_header.name)
     shutil.copy2(LIB / "src/FreeInkDisplay.cpp", root / "src/FreeInkDisplay.cpp")
-    for name in ("Ssd1677Luts.h", "Uc8279X3Luts.h", "UltraChipDirectGrayLuts.h", "X4ProTextAaLuts.h", "X4ProImageLuts.h"):
+    for name in ("Ssd1677Luts.h", "Uc8279X3Luts.h", "UltraChipDirectGrayLuts.h", "X4ProTextAaLuts.h", "X4ProImageLuts.h", "Uc8179Gray16Luts.h"):
         shutil.copy2(LIB / f"src/lut/{name}", root / f"src/lut/{name}")
     for name in ("Arduino.h", "BoardConfig.h", "SPI.h", "esp_heap_caps.h", "sdkconfig.h"):
         shutil.copy2(HERE / "pro_stubs" / name, root / name)

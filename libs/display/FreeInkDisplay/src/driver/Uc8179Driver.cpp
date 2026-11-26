@@ -5,6 +5,9 @@
 #include <BoardConfig.h>
 #include <string.h>
 
+#include <utility>
+
+#include "../lut/Uc8179Gray16Luts.h"
 #include "../lut/UltraChipDirectGrayLuts.h"
 #if defined(BOARD_HAS_PSRAM)
 #include <esp_heap_caps.h>
@@ -897,6 +900,128 @@ void Uc8179Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
   _oldPlaneValid = true;
   _bwPlanesSynced = true;
   // RAM restoration does not cancel a requested physical clean.
+}
+
+// --- 16-level images (X4 Pro), from jpirnay/freeink-sdk feat/x4pro-gray16 ---------------------------------
+
+namespace {
+// uc8179_gray16::kLevelTenths as the int16_t x10 the PanelDriver::gray16LevelLstar() contract hands out.
+constexpr int16_t kGray16LevelLstarX10[16] = {749, 675, 643, 611, 580, 547, 515, 487,
+                                              458, 423, 387, 331, 303, 250, 215, 165};
+template <size_t... I>
+constexpr bool lstarTableMatches(std::index_sequence<I...>) {
+  return ((kGray16LevelLstarX10[I] == static_cast<int16_t>(uc8179_gray16::kLevelTenths[I])) && ...);
+}
+static_assert(lstarTableMatches(std::make_index_sequence<16>{}), "gray16 L* copy drifted from the LUT header");
+}  // namespace
+
+void Uc8179Driver::runTableFrame(EpdBus& bus, const uint8_t* bw, const uint8_t* red, const uint8_t* tables,
+                                 const uint8_t* registers, const size_t registersLen) {
+  bus.waitBusy(" 8179_table_ready");
+  restoreBwConfiguration(bus);
+  _directGrayPass = false;
+  _directGrayPlanes = 0;
+  _absoluteInput = false;
+  // The register sequence of the one-pass text frame, with these planes and tables.
+  streamPlane(bus, CMD_DTM1, red);
+  streamPlane(bus, CMD_DTM2, bw);
+  bus.cmd(CMD_PANEL_SETTING);
+  bus.data(_cfg.psr0);
+  bus.data(_cfg.psr1);
+  bus.cmd(CMD_PFS);
+  bus.data(0x20);
+  bus.cmd(CMD_GATE_SCAN);
+  bus.data(2);
+  for (unsigned i = 0; i < 5; ++i) {
+    bus.cmd(0x20 + i);
+    bus.data(tables + i * GRAY_LUT_LEN, GRAY_LUT_LEN);
+  }
+  bus.cmd(CMD_VCOM_DATA_INTERVAL);
+  bus.data(0x29);
+  bus.data(CDI_INTERVAL);
+  // The frame's own registers last (frame rate, source voltages, VCOM): after the tables, so they win.
+  for (size_t i = 0; i + 1 < registersLen; i += 2 + registers[i + 1]) {
+    bus.cmd(registers[i]);
+    if (registers[i + 1]) bus.data(registers + i + 2, registers[i + 1]);
+  }
+  if (!_isScreenOn) {
+    bus.cmd(CMD_POWER_ON);
+    bus.waitBusy(" 8179_table_PON");
+    _isScreenOn = true;
+  }
+  bus.cmd(CMD_DISPLAY_REFRESH);
+  bus.waitRefreshComplete(" 8179_table_DRF");
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8179_table_POF");
+  _isScreenOn = false;
+  if (registersLen) {
+    // Back to the controller's own settings: a reset returns what the frame changed to its power-on values, which
+    // every other frame assumes (this driver never sets them), and the init puts back what it does set. A reset
+    // drives no pixel.
+    bus.reset(50);
+    initController(bus);
+    _directGrayConfigured = false;
+  }
+  // The glass holds whatever these tables made of each code, which no retained plane describes: no text history
+  // survives, and the next frame is a full one.
+  _textAa.invalidate();
+  _needFullClear = true;
+  _oldPlaneValid = false;
+  _bwPlanesSynced = false;
+  _redriveAfterGray = false;
+}
+
+bool Uc8179Driver::supportsGray16Image() const { return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4Pro; }
+
+const int16_t* Uc8179Driver::gray16LevelLstar() const { return supportsGray16Image() ? kGray16LevelLstarX10 : nullptr; }
+
+bool Uc8179Driver::displayGray16Image(EpdBus& bus, const uint8_t* levels, const RefreshMode mode, const bool turnOff) {
+  (void)mode;     // the levels were measured on a full-refresh base, so the base is always one
+  (void)turnOff;  // every pass powers the panel off at its end
+  if (!supportsGray16Image() || !levels) return false;
+#if !defined(BOARD_HAS_PSRAM)
+  (void)bus;
+  return false;  // the three planes below live in PSRAM; a build without it has no X4 Pro
+#else
+  // The base and each pass's two selector planes, 1 bpp in the framebuffer's layout (pixel p at byte p / 8, bit
+  // 7 - p % 8; _w is a multiple of 8). 3 x 48 KB: PSRAM, which this board always has; freed below.
+  auto* planes = static_cast<uint8_t*>(
+      heap_caps_malloc(static_cast<size_t>(_bufferSize) * 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!planes) return false;  // no PSRAM for the planes: nothing was sent
+  uint8_t* const base = planes;
+  uint8_t* const red = planes + _bufferSize;
+  uint8_t* const bw = red + _bufferSize;
+  const uint32_t pixels = static_cast<uint32_t>(_w) * _h;
+  const auto levelAt = [levels](const uint32_t p) -> uint8_t {
+    const uint8_t pair = levels[p >> 1];
+    return (p & 1) ? static_cast<uint8_t>(pair & 0x0F) : static_cast<uint8_t>(pair >> 4);
+  };
+  memset(base, 0, _bufferSize);
+  for (uint32_t p = 0; p < pixels; ++p) {
+    if (uc8179_gray16::kPaths[levelAt(p)].whiteBase) base[p >> 3] |= static_cast<uint8_t>(0x80 >> (p & 7));
+  }
+  display(bus, base, nullptr, RefreshMode::Full, false);
+  for (int pass = 0; pass < 2; ++pass) {
+    memset(red, 0, _bufferSize);
+    memset(bw, 0, _bufferSize);
+    for (uint32_t p = 0; p < pixels; ++p) {
+      const uc8179_gray16::Path& path = uc8179_gray16::kPaths[levelAt(p)];
+      const uint8_t code = pass == 0 ? path.pass1 : path.pass2;  // DTM1 * 2 + DTM2
+      const auto bit = static_cast<uint8_t>(0x80 >> (p & 7));
+      if (code & 2) red[p >> 3] |= bit;
+      if (code & 1) bw[p >> 3] |= bit;
+    }
+    if (pass == 0) {
+      runTableFrame(bus, bw, red, uc8179_gray16::kPass1Tables, uc8179_gray16::kPass1Registers,
+                    sizeof(uc8179_gray16::kPass1Registers));
+    } else {
+      runTableFrame(bus, bw, red, uc8179_gray16::kPass2Tables, uc8179_gray16::kPass2Registers,
+                    sizeof(uc8179_gray16::kPass2Registers));
+    }
+  }
+  heap_caps_free(planes);
+  return true;
+#endif
 }
 
 // Per-board config injection, same idiom as the other drivers: define

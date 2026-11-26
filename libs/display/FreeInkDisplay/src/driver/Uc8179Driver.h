@@ -106,11 +106,27 @@ class Uc8179Driver : public PanelDriver {
   void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
 
+  // --- 16-level images (X4 Pro): Free-Ink #220's shape with this panel's doses (lut/Uc8179Gray16Luts.h) ---
+  // Ported from jpirnay/freeink-sdk feat/x4pro-gray16 (d95e37a1, 5a16c8e9, 377d561a) without its 8-bit canvas
+  // adapter: the host supplies the 4 bpp levels itself (CrossPoint's SleepGray16 / picture pages).
+  // A B/W base by a full refresh, then two table passes, each choosing one of four LUT rows per pixel by its
+  // code. X4 Pro only: the doses and levels were measured on its UC8179 panel. `mode` and `turnOff` are
+  // ignored (the base is always a full refresh, every pass powers the panel off), and the next frame is a full
+  // one. No text-turn API (beginGray16Text): gray16DeepLevels() stays 0.
+  bool supportsGray16Image() const override;
+  bool displayGray16Image(EpdBus& bus, const uint8_t* levels, RefreshMode mode, bool turnOff) override;
+  const int16_t* gray16LevelLstar() const override;
+
  private:
   X4ProTextAa _textAa;
   bool _readerRefresh = false;
   void initController(EpdBus& bus);
   void startBwRefresh(EpdBus& bus, bool fast);
+  // One activation with external tables: `red` to DTM1, `bw` to DTM2, the five 42-byte tables for 0x20..0x24,
+  // then `registers` (records of command, length, bytes), which win over the tables' setup. After register
+  // writes the controller is reset and initialised again. The 16-level passes run through it.
+  void runTableFrame(EpdBus& bus, const uint8_t* bw, const uint8_t* red, const uint8_t* tables,
+                     const uint8_t* registers, size_t registersLen);
   void configureDirectGrayscale(EpdBus& bus);
   void restoreBwConfiguration(EpdBus& bus);
   // Stream a framebuffer into a RAM plane (ramCmd): reverse row order, use PSR
