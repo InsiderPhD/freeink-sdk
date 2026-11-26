@@ -1811,7 +1811,7 @@ constexpr BoardProfile METALIO_EINK4 = {
 // bus, and the power/wake button.
 //
 // Pending hardware validation / deeper RE (shipped conservatively here):
-//   * Buttons — up=21 / down=9 confirmed on hardware; GPIO5's role is not.
+//   * Buttons — up=21 / down=9 confirmed on hardware; GPIO5 is a hall (magnet) sensor.
 //   * Frontlight — it's a 2-channel warm/cool I2C LED driver @0x38 (not PWM, not
 //     the LM3630A the I2cFrontlight backend supports) → NO_FRONTLIGHT until a
 //     driver is added.
@@ -1841,10 +1841,12 @@ constexpr BoardProfile PICCO = {
     // SDMMC mount keeps it on without the X4 Pro-style power cycle, as stock does.
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0, false, 0, false, false},
     // Buttons: power/wake = GPIO2 (active-low, RTC ext0 wake source). Up = GPIO21 and
-    // Down = GPIO9 (hardware-confirmed). GPIO5 is the remaining input from the stock
-    // button constructor (2, 5, 21, 9); carried as confirm, physical role unconfirmed.
-    // Slide switch on GPIO6.
-    {PIN_UNASSIGNED, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 21, 9, 2, false, PIN_UNASSIGNED, 6},
+    // Down = GPIO9 (hardware-confirmed). GPIO5, the remaining input in the stock button
+    // constructor (2, 5, 21, 9), is a magnet (hall) sensor, not a key: a magnet held to
+    // the case reads as a press (confirmed on hardware). It was carried as Confirm, which
+    // made a magnet hold Confirm down; the Picco ships without a cover and has no Confirm
+    // key (Confirm comes from taps), so it is left unassigned. Slide switch on GPIO6.
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 21, 9, 2, false, PIN_UNASSIGNED, 6},
     1,               // batteryAdc: GPIO1 (ADC1, 12 dB attenuation in stock)
     PIN_UNASSIGNED,  // batteryChargeStatus: no STAT pin; charge state comes from the SGM41562
     2.0f,
